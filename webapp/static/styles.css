@@ -515,7 +515,7 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .series-section-heading { display: flex; gap: 15px; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
 .series-section-heading p:not(.eyebrow) { margin: 4px 0 0; color: var(--quiet); font-size: 0.68rem; }
 .autosave-note, .asset-counter { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--quiet); font-size: 0.59rem; }
-.preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .preset-card { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: auto auto; gap: 2px 10px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-card); cursor: pointer; }
 .preset-card:hover { border-color: var(--line-strong); background: var(--control-hover); }
 .preset-card:focus-within { outline: 3px solid rgba(var(--cyan-rgb), 0.8); outline-offset: 3px; }
@@ -531,6 +531,11 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .movie-art::before, .movie-art::after { content: ""; position: absolute; }
 .movie-art::before { inset: 10px 8px; border: 2px solid var(--text); border-radius: 5px; opacity: 0.72; }
 .movie-art::after { top: 15px; left: 18px; border: 7px solid transparent; border-left: 10px solid var(--accent); }
+.world-travel-art::before, .world-travel-art::after { content: ""; position: absolute; }
+.world-travel-art::before { inset: 8px; border: 2px solid var(--text); border-radius: 50%; opacity: 0.75; }
+.world-travel-art::after { inset: 14px 7px; border-top: 2px solid var(--text); border-bottom: 2px solid var(--text); border-radius: 50%; opacity: 0.52; }
+.world-travel-art i:first-child { position: absolute; inset: 8px 17px; z-index: 1; border-left: 2px solid var(--text); border-right: 2px solid var(--text); border-radius: 50%; opacity: 0.52; }
+.world-travel-art i:last-child { position: absolute; right: 4px; bottom: 7px; z-index: 2; width: 9px; height: 9px; border: 2px solid var(--panel-raised); border-radius: 50%; background: var(--accent); box-shadow: -18px -18px 0 -2px var(--cyan); }
 .series-title-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 12px; margin-top: 14px; }
 .optional-label { color: var(--quiet); font-size: 0.6rem; font-weight: 500; }
 .series-title-grid textarea { min-height: 82px; }
@@ -549,6 +554,9 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .canonical-slot-copy small { color: var(--quiet); font-size: 0.58rem; }
 .canonical-slot-remove { position: relative; z-index: 2; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--quiet); cursor: pointer; }
 .canonical-slot-remove:hover { background: rgba(var(--red-rgb), 0.1); color: var(--red); }
+.world-travel-identity-guard { margin-top: 10px; padding: 11px 12px; border: 1px solid rgba(var(--cyan-rgb), 0.28); border-radius: 11px; background: rgba(var(--cyan-rgb), 0.055); }
+.world-travel-identity-guard strong { display: block; color: var(--ink); font-size: 0.66rem; }
+.world-travel-identity-guard p { margin: 4px 0 0; color: var(--quiet); font-size: 0.6rem; line-height: 1.48; }
 .more-references { margin-top: 10px; border-top: 1px solid var(--line); }
 .more-references summary { padding: 11px 1px 2px; color: var(--muted); cursor: pointer; font-size: 0.67rem; font-weight: 700; }
 .series-reference-uploads { margin-top: 10px; }
@@ -569,6 +577,23 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .shot-icon-button.delete:hover { background: rgba(var(--red-rgb), 0.1); color: var(--red); }
 .shot-card-body { padding: 12px; }
 .shot-card-body textarea { min-height: 118px; padding: 11px 12px; font-size: 0.7rem; line-height: 1.48; }
+.scene-reference-editor { margin: 0 0 11px; padding: 10px; border: 1px dashed var(--drop-line); border-radius: 10px; background: var(--surface-card); }
+.scene-reference-editor.ready { border-style: solid; border-color: rgba(var(--green-rgb), 0.34); background: rgba(var(--green-rgb), 0.045); }
+.scene-reference-heading { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; align-items: center; }
+.scene-reference-heading strong, .scene-reference-heading small { display: block; }
+.scene-reference-heading strong { color: var(--ink); font-size: 0.66rem; }
+.scene-reference-heading small { margin-top: 1px; overflow: hidden; color: var(--quiet); font-size: 0.58rem; text-overflow: ellipsis; white-space: nowrap; }
+.scene-reference-tag { display: grid; width: 33px; height: 33px; place-items: center; border-radius: 9px; background: rgba(var(--accent-rgb), 0.11); color: var(--accent); font: 850 0.6rem ui-monospace, monospace; }
+.scene-reference-controls { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.scene-reference-drop { position: relative; display: inline-flex; min-height: 34px; align-items: center; justify-content: center; padding: 6px 10px; border: 1px dashed var(--drop-line); border-radius: 8px; color: var(--muted); cursor: pointer; font-size: 0.61rem; font-weight: 750; }
+.scene-reference-drop:hover, .scene-reference-drop.dragging { border-color: rgba(var(--accent-rgb), 0.55); background: rgba(var(--accent-rgb), 0.055); color: var(--text); }
+.scene-reference-drop:focus-within { outline: 3px solid rgba(var(--cyan-rgb), 0.8); outline-offset: 2px; }
+.scene-reference-drop.uploading { pointer-events: none; opacity: 0.55; }
+.scene-reference-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.scene-reference-reuse { width: auto; min-width: min(230px, 100%); min-height: 34px; padding: 5px 28px 5px 9px; font-size: 0.6rem; }
+.scene-reference-remove { min-height: 34px; padding: 5px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--quiet); cursor: pointer; font-size: 0.6rem; }
+.scene-reference-remove:hover { background: rgba(var(--red-rgb), 0.1); color: var(--red); }
+.scene-reference-guard { margin: 7px 0 0; color: var(--quiet); font-size: 0.57rem; line-height: 1.42; }
 .shot-reference-map { margin-top: 8px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-card-strong) 82%, transparent); }
 .shot-reference-map summary { cursor: pointer; padding: 8px 10px; color: var(--quiet); font-size: 0.62rem; font-weight: 700; }
 .shot-reference-map-list { display: grid; gap: 4px; padding: 0 10px 10px; color: var(--quiet); font-size: 0.58rem; }
@@ -582,6 +607,7 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .shot-duration-control output { color: var(--text); font-size: 0.61rem; text-align: right; }
 .shot-continuity-note { display: flex; gap: 6px; align-items: center; margin: 9px 0 0; color: var(--quiet); font-size: 0.59rem; }
 .shot-continuity-note::before { content: "↳"; color: var(--cyan); }
+.asset-card.parked { border-style: dashed; opacity: 0.72; }
 .add-shot-button { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; border: 1px dashed var(--drop-line); border-radius: 11px; background: transparent; color: var(--muted); cursor: pointer; font-size: 0.68rem; font-weight: 700; }
 .add-shot-button:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), 0.5); background: rgba(var(--accent-rgb), 0.045); color: var(--text); }
 .add-shot-button:disabled { cursor: not-allowed; opacity: 0.42; }

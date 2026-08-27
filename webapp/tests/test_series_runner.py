@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import tempfile
 import unittest
 import uuid
@@ -9,7 +11,13 @@ from unittest.mock import AsyncMock
 
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
-from webapp.series_runner import SeriesRunner, build_series_document, public_series
+from webapp.series_media import SeriesMediaError
+from webapp.series_runner import (
+    LALACHAN_REFERENCE_LABELS,
+    SeriesRunner,
+    build_series_document,
+    public_series,
+)
 from webapp.series_store import SeriesStore
 from webapp.workflows import RequestError, UploadedAsset
 
@@ -98,7 +106,7 @@ class FakeMedia:
                 "relative": tail.name,
                 "mime": "video/mp4",
                 "download_name": tail.name,
-                "metadata": {"duration": seconds},
+                "metadata": {"duration": seconds, "sha256": "b" * 64},
             },
             {
                 "id": str(uuid.uuid4()),
@@ -108,7 +116,7 @@ class FakeMedia:
                 "relative": frame.name,
                 "mime": "image/png",
                 "download_name": frame.name,
-                "metadata": {},
+                "metadata": {"sha256": "c" * 64},
             },
         )
 
@@ -189,6 +197,74 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "node_id": "42",
         }
 
+    @staticmethod
+    def world_document(input_root: Path | None = None):
+        assets = {}
+        labels = [*LALACHAN_REFERENCE_LABELS, "Rome Colosseum", "Florence Duomo"]
+        for index, label in enumerate(labels, start=1):
+            relative = f"travel/reference-{index}.png"
+            content = f"trusted-{label}".encode()
+            digest = hashlib.sha256(content).hexdigest()
+            if input_root is not None:
+                target = input_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            assets[label] = UploadedAsset(
+                "image",
+                relative,
+                f"reference-{index}.png",
+                {"sha256": digest},
+            )
+
+        def resolve(token, kind, optional):
+            if token is None and optional:
+                return None
+            asset = assets[token]
+            if asset.kind != kind:
+                raise AssertionError(f"expected {kind}, got {asset.kind}")
+            return asset
+
+        payload = {
+            "title": "LALACHAN World Travel · Italy",
+            "brief": "Follow one northbound route through Italy; earlier episodes are voice reference only.",
+            "template": "world_travel",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1024,
+                "height": 768,
+                "continuity_seconds": 3,
+                "advance": True,
+            },
+            "references": {
+                "images": [{"token": label, "label": label} for label in LALACHAN_REFERENCE_LABELS],
+                "videos": [],
+                "audio": [],
+            },
+            "shots": [
+                {
+                    "title": "Rome",
+                    "prompt": "At <Picture 8>, discover a visible layer of Roman history.",
+                    "duration": 5,
+                    "seed": 101,
+                    "scene_reference": {
+                        "token": "Rome Colosseum",
+                        "label": "Rome · Colosseum exterior",
+                    },
+                },
+                {
+                    "title": "Florence",
+                    "prompt": "Continue north to <Picture 8>; do not copy the Rome composition.",
+                    "duration": 5,
+                    "seed": 102,
+                    "scene_reference": {
+                        "token": "Florence Duomo",
+                        "label": "Florence · Duomo street view",
+                    },
+                },
+            ],
+        }
+        return build_series_document(payload, resolve), payload, resolve
+
     async def test_waits_for_unrelated_job_then_chains_and_stitches(self) -> None:
         unrelated = str(uuid.uuid4())
         self.jobs.register(unrelated, {"mode": "t2v"}, status="pending")
@@ -237,6 +313,209 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(public["progress"]["percent"], 100.0)
         self.assertEqual(public["final_artifact"]["kind"], "final")
         self.assertEqual(len(public["shots"][0]["attempts"]), 1)
+
+    async def test_world_travel_uses_per_shot_p8_then_continuity_p9(self) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        document, _, _ = self.world_document(input_root)
+        first_assets, first_mode, first_labels = self.runner._references_for_shot(document, 0)
+        self.assertEqual(first_mode, "r2v")
+        self.assertEqual(
+            [asset.original_name for asset in first_assets["ref_images"]],
+            [f"reference-{index}.png" for index in range(1, 9)],
+        )
+        self.assertEqual(
+            first_labels[:7],
+            [f"<Picture {index}> = {label}" for index, label in enumerate(LALACHAN_REFERENCE_LABELS, start=1)],
+        )
+        self.assertEqual(first_labels[7], "<Picture 8> = Rome · Colosseum exterior")
+        self.assertFalse(any("<Picture 9>" in label for label in first_labels))
+
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        second_assets, _, second_labels = self.runner._references_for_shot(document, 1)
+        self.assertEqual(second_assets["ref_images"][-2].original_name, "reference-9.png")
+        self.assertEqual(second_assets["ref_images"][-1].original_name, "frame.png")
+        self.assertIn("<Picture 8> = Florence · Duomo street view", second_labels)
+        self.assertIn("<Picture 9> = previous shot's exact final frame", second_labels)
+        prompt = self.runner._series_prompt(document, 1, second_labels)
+        for required in (
+            "lock every named character's identity",
+            "wardrobe",
+            "voice across the whole journey",
+            "travel route, geography, screen direction",
+            "Picture 8 is the location",
+            "for this shot only",
+            "never copy its country, plot, story direction",
+            "Continue directly and seamlessly",
+        ):
+            self.assertIn(required, prompt)
+
+    async def test_successor_requires_complete_hashed_continuity_before_p9(self) -> None:
+        document, _, _ = self.world_document()
+        valid = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        for missing in (
+            "video_path",
+            "video_sha256",
+            "image_path",
+            "image_sha256",
+        ):
+            candidate = copy.deepcopy(document)
+            candidate["shots"][0]["continuity_input"] = dict(valid)
+            candidate["shots"][0]["continuity_input"].pop(missing)
+            with self.subTest(missing=missing), self.assertRaisesRegex(
+                SeriesMediaError, "incomplete or unverified"
+            ):
+                self.runner._references_for_shot(candidate, 1)
+
+        document["shots"][0]["continuity_input"] = {
+            **valid,
+            "image_sha256": "not-a-sha256",
+        }
+        with self.assertRaisesRegex(SeriesMediaError, "incomplete or unverified"):
+            self.runner._references_for_shot(document, 1)
+
+        document["shots"][0]["continuity_input"] = {
+            **valid,
+            "image_path": "../escaped-frame.png",
+        }
+        with self.assertRaisesRegex(SeriesMediaError, "incomplete or unverified"):
+            self.runner._references_for_shot(document, 1)
+
+    async def test_malformed_recovered_continuity_fails_before_gpu_submission(self) -> None:
+        def recover_with_bad_handoff(document, _):
+            first = document["shots"][0]
+            first["status"] = "completed"
+            first["accepted_attempt"] = 1
+            first["attempts"] = [
+                {
+                    "number": 1,
+                    "job_id": str(uuid.uuid4()),
+                    "status": "completed",
+                    "error": None,
+                    "artifact_ids": [],
+                    "reference_map": [],
+                }
+            ]
+            first["continuity_input"] = {
+                "video_path": "h3/tail.mp4",
+                "video_name": "tail.mp4",
+                "video_sha256": "b" * 64,
+                "image_path": "h3/frame.png",
+                "image_name": "frame.png",
+                # Simulate an older/corrupt durable record with no image hash.
+            }
+            return document, "running"
+
+        self.series.mutate(self.series_id, recover_with_bad_handoff)
+        self.assertTrue(await self.runner.run_once())
+        failed = self.series.get(self.series_id)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["document"]["shots"][1]["status"], "failed")
+        self.assertEqual(failed["document"]["shots"][1]["attempts"], [])
+        self.assertEqual(self.client.submissions, [])
+        self.assertIn("before GPU submission", failed["document"]["error"])
+
+    async def test_world_travel_scene_is_private_persistent_and_hash_guarded(
+        self,
+    ) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        document, _, _ = self.world_document(input_root)
+        series_id = str(uuid.uuid4())
+        created = self.series.create(series_id, document, status="queued")
+        reopened = SeriesStore(self.series.path).get(series_id)
+        scene_private = reopened["document"]["shots"][0]["scene_reference"]
+        self.assertEqual(scene_private["path"], "travel/reference-8.png")
+        self.assertRegex(scene_private["sha256"], r"^[0-9a-f]{64}$")
+        public = public_series(created, self.client)
+        self.assertEqual(
+            public["shots"][0]["scene_reference"],
+            {
+                "kind": "image",
+                "name": "reference-8.png",
+                "label": "Rome · Colosseum exterior",
+            },
+        )
+        serialized = str(public["shots"][0]["scene_reference"])
+        self.assertNotIn("travel/", serialized)
+        self.assertNotIn("sha256", serialized)
+        self.assertNotIn("token", serialized)
+
+        guarded = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=input_root,
+        )
+        fingerprints = await guarded._verify_reference_integrity(document, 0)
+        self.assertEqual(len(fingerprints), 8)
+        self.assertEqual(fingerprints[-1]["label"], "Rome · Colosseum exterior")
+        (input_root / "travel/reference-8.png").write_bytes(b"changed scene")
+        with self.assertRaisesRegex(SeriesMediaError, "Rome · Colosseum exterior.*changed after upload"):
+            await guarded._verify_reference_integrity(document, 0)
+
+    async def test_world_travel_requires_seven_canonical_images_and_each_scene(
+        self,
+    ) -> None:
+        _, payload, resolve = self.world_document()
+        payload["shots"][0].pop("scene_reference")
+        with self.assertRaisesRegex(RequestError, "Shot 1 scene_reference"):
+            build_series_document(payload, resolve)
+
+        _, payload, resolve = self.world_document()
+        payload["references"]["images"].append({"token": "Rome Colosseum", "label": "Unwanted shared location"})
+        with self.assertRaisesRegex(RequestError, "requires exactly seven pictures"):
+            build_series_document(payload, resolve)
+
+    async def test_world_travel_submission_keeps_paths_private_from_job_metadata(
+        self,
+    ) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        document, _, _ = self.world_document(input_root)
+        series_id = str(uuid.uuid4())
+        record = self.series.create(series_id, document, status="queued")
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=input_root,
+        )
+        self.assertTrue(
+            await runner._submit_shot(
+                series_id,
+                document,
+                0,
+                expected_revision=int(record["revision"]),
+            )
+        )
+        submission = self.client.submissions[-1]
+        image_paths = [
+            node["inputs"]["image"] for node in submission["prompt"].values() if node["class_type"] == "LoadImage"
+        ]
+        self.assertEqual(image_paths, [f"travel/reference-{index}.png" for index in range(1, 9)])
+        fingerprints = submission["metadata"]["reference_fingerprints"]
+        self.assertEqual(fingerprints[-1]["label"], "Rome · Colosseum exterior")
+        self.assertTrue(all("path" not in item for item in fingerprints))
+        durable = SeriesStore(self.series.path).get(series_id)
+        attempt = durable["document"]["shots"][0]["attempts"][0]
+        self.assertEqual(
+            attempt["reference_map"][7],
+            "<Picture 8> = Rome · Colosseum exterior",
+        )
 
     async def test_shared_admission_lock_rechecks_after_a_manual_claim_race(self) -> None:
         await self.runner.submission_lock.acquire()
@@ -481,8 +760,10 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         document["shots"][0]["continuity_input"] = {
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
+            "image_sha256": "c" * 64,
         }
         _, _, next_labels = self.runner._references_for_shot(document, 1)
         next_prompt = self.runner._series_prompt(document, 1, next_labels)
@@ -598,8 +879,10 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             first["continuity_input"] = {
                 "video_path": "h3/tail.mp4",
                 "video_name": "tail.mp4",
+                "video_sha256": "b" * 64,
                 "image_path": "h3/frame.png",
                 "image_name": "frame.png",
+                "image_sha256": "c" * 64,
             }
             return document, "running"
 

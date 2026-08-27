@@ -26,7 +26,8 @@ const state = {
     canonical: Array(7).fill(null),
     extras: { images: [], videos: [], audio: [] },
     shots: [],
-    templateShots: { lalachan: null, movie: null },
+    templateShots: { lalachan: null, world_travel: null, movie: null },
+    sceneUploadVersions: new Map(),
     assetValidation: "verified",
     assetValidationVersion: 0,
     uploading: 0,
@@ -98,11 +99,17 @@ const elements = {
   seriesOutputWorkspace: $("#seriesOutputWorkspace"),
   seriesTitle: $("#seriesTitle"),
   seriesBrief: $("#seriesBrief"),
+  seriesCastTitle: $("#seriesCastTitle"),
+  seriesCastDescription: $("#seriesCastDescription"),
   seriesProfile: $("#seriesProfile"),
   seriesResolution: $("#seriesResolution"),
   seriesContinuity: $("#seriesContinuity"),
   seriesRefImageSize: $("#seriesRefImageSize"),
   canonicalReferenceGrid: $("#canonicalReferenceGrid"),
+  worldTravelIdentityGuard: $("#worldTravelIdentityGuard"),
+  seriesMoreReferencesSummary: $("#seriesMoreReferencesSummary"),
+  seriesExtraImagesDrop: $("#seriesExtraImagesDrop"),
+  seriesExtraImages: $("#seriesExtraImages"),
   seriesExtraAssetList: $("#seriesExtraAssetList"),
   seriesAssetCount: $("#seriesAssetCount"),
   seriesShotList: $("#seriesShotList"),
@@ -142,12 +149,24 @@ const LALACHAN_REFERENCES = [
   ["Aya Chan", "Female red panda hero and original outfit"],
   ["Sasa Kun", "Human boy, visible face, panda hoodie"],
 ];
+const WORLD_TRAVEL_REFERENCES = LALACHAN_REFERENCES;
 const MOVIE_REFERENCES = [
   ["Main character", "Primary face, costume, or subject"],
   ["Supporting character", "Second identity or object"],
   ["World & location", "Set, environment, or visual language"],
   ["Key prop", "An object that must remain recognizable"],
 ];
+const SERIES_TEMPLATES = ["lalachan", "world_travel", "movie"];
+const SERIES_TEMPLATE_LABELS = {
+  lalachan: "LALACHAN Series",
+  world_travel: "World Travel",
+  movie: "My Movie",
+};
+const SERIES_TEMPLATE_TITLES = {
+  lalachan: "New LALACHAN episode",
+  world_travel: "New World Travel episode",
+  movie: "My movie",
+};
 
 const recipes = {
   t2v: `A cinematic single-take scene of [subject] in [environment].
@@ -809,21 +828,45 @@ function newLocalId() {
 }
 
 function defaultSeriesShots(template = "lalachan") {
-  const seeds = ["20260828", "20260829", "20260830"];
-  const source = template === "lalachan" ? [
-    ["The signal", `One continuous cinematic opening shot. Continue the LALACHAN world with all supplied identities exact. Establish the place and a clear problem. Keep <Picture 5> Rara Xia, <Picture 6> Aya Chan, <Picture 7> Sasa Kun as a visibly human boy, and <Picture 2> Zhuangzi Robot distinct and readable. Let one character discover the clue on <Picture 1>. Natural Chinese dialogue, accurate lip sync, stereo ambience and tactile sound effects. No subtitles, narration, interface text, duplicate characters, or extra cast.`],
-    ["Working together", `One continuous medium-wide shot. Continue the previous scene without replaying its completed action. Keep the same time of day, geography, costumes, scale, and four distinct identities from <Picture 2>, <Picture 5>, <Picture 6>, and <Picture 7>. The team solves the problem through a visible sequence of actions using <Picture 3> or <Picture 4>. Give each action a clear cause and effect. Natural Chinese dialogue, native stereo ambience, precise prop sounds. No subtitles, narration, duplicate characters, or unexplained cuts.`],
-    ["A warm next clue", `A graceful closing shot that continues the previous scene without replaying it. Preserve every character and prop identity. Resolve the immediate problem, then reveal one small visual clue for the next LALACHAN episode. End on a strong, calm composition that can become the next episode's opening reference. Warm natural Chinese conversation, accurate lip sync, stereo environmental sound and a restrained musical lift. No subtitles, narration, interface text, duplicate characters, or new cast.`],
-  ] : [
-    ["Opening image", `A cinematic opening shot. Establish the main character, location, time of day, and the question that pulls us forward. Describe exact blocking, camera movement, lighting, dialogue, ambience, and sound effects. Preserve every supplied reference identity. No subtitles, narration, interface text, duplicate subjects, or unexplained cuts.`],
-    ["Change", `Continue the previous scene without replaying its completed action. Show one meaningful choice or change through a clear sequence of visible actions. Preserve geography, screen direction, wardrobe, lighting logic, and all supplied identities. Direct the camera, dialogue, ambience, and tactile sounds. No subtitles or interface text.`],
-    ["Resolution", `Continue exactly from the previous shot. Resolve the immediate action and land on a memorable final image. Leave a subtle visual possibility for another scene while making this sequence feel complete. Preserve all reference identities, native stereo sound, and natural dialogue. No subtitles or interface text.`],
-  ];
-  return source.map(([title, prompt], index) => ({ id: newLocalId(), title, prompt, duration: 10, seed: seeds[index] }));
+  const seeds = ["20260828", "20260829", "20260830", "20260831", "20260832", "20260833"];
+  let source;
+  if (template === "lalachan") {
+    source = [
+      ["The signal", `One continuous cinematic opening shot. Continue the LALACHAN world with all supplied identities exact. Establish the place and a clear problem. Keep <Picture 5> Rara Xia, <Picture 6> Aya Chan, <Picture 7> Sasa Kun as a visibly human boy, and <Picture 2> Zhuangzi Robot distinct and readable. Let one character discover the clue on <Picture 1>. Natural Chinese dialogue, accurate lip sync, stereo ambience and tactile sound effects. No subtitles, narration, interface text, duplicate characters, or extra cast.`],
+      ["Working together", `One continuous medium-wide shot. Continue the previous scene without replaying its completed action. Keep the same time of day, geography, costumes, scale, and four distinct identities from <Picture 2>, <Picture 5>, <Picture 6>, and <Picture 7>. The team solves the problem through a visible sequence of actions using <Picture 3> or <Picture 4>. Give each action a clear cause and effect. Natural Chinese dialogue, native stereo ambience, precise prop sounds. No subtitles, narration, duplicate characters, or unexplained cuts.`],
+      ["A warm next clue", `A graceful closing shot that continues the previous scene without replaying it. Preserve every character and prop identity. Resolve the immediate problem, then reveal one small visual clue for the next LALACHAN episode. End on a strong, calm composition that can become the next episode's opening reference. Warm natural Chinese conversation, accurate lip sync, stereo environmental sound and a restrained musical lift. No subtitles, narration, interface text, duplicate characters, or new cast.`],
+    ];
+  } else if (template === "world_travel") {
+    source = [
+      ["Arrival and question", `Use <Picture 8> only as this shot's destination, architecture, terrain, light, and atmosphere anchor. Open with a motivated arrival and one visible question that starts the journey. Introduce the route through an action with <Picture 4> or <Picture 1>, not exposition. Keep the four travelers exact. Natural concise Chinese dialogue, accurate lip sync, native stereo ambience, and tactile travel sounds. No subtitles, narration, extra cast, checklist montage, or borrowed action from an earlier episode.`],
+      ["The oldest layer", `Continue seamlessly from <Picture 9> without replaying the prior action. Let <Picture 8> reveal one important historical layer through something the travelers can see, touch, cross, or compare. Turn one character's observation into a short question and a natural answer; show cause and effect instead of reciting facts. Preserve route, carried props, wardrobe, screen direction, voices, and all four identities. No subtitles, narration, or unrelated landmarks.`],
+      ["People who made it", `Continue the same journey from <Picture 9>. Use this shot's <Picture 8> to connect one maker, craft, artwork, building method, or local invention to a visible present-day detail. Give each character a distinct, brief reaction and keep the camera movement physically coherent. Natural Chinese conversation, accurate lip sync, local ambience, and precise prop sounds. Do not turn the scene into a lecture or copy an earlier episode's composition.`],
+      ["Everyday life", `Continue directly from <Picture 9>. In the place anchored by <Picture 8>, let the travelers encounter one ordinary custom, street, market, food, or social ritual that makes the destination feel lived in. The discovery must advance the same question or journey rather than pause for a travel advertisement. Preserve identities, route logic, time progression, wardrobe, voices, and carried props. No subtitles, narration, stereotypes, or unexplained cuts.`],
+      ["Road to the final place", `Use <Picture 9> to finish the prior movement and <Picture 8> only for the new stop. Make the geographic transition legible through a road, rail, river, path, doorway, or motivated visual match. Reveal one essential sight and one concise historical connection through action and dialogue. Keep screen direction, time progression, cast identity, voices, wardrobe, and props coherent. No tourist-checklist montage, narration, or borrowed plot direction.`],
+      ["Living memory", `Continue from <Picture 9> into the final place anchored by <Picture 8>. Resolve the opening question by showing how the destination's history remains alive in a present sound, object, street, craft, meal, or shared gesture. Let <Picture 1> or <Picture 4> complete the emotional thread, then end on a calm final composition suitable for future continuity. Warm concise Chinese dialogue, accurate lip sync, stereo place ambience. No subtitles, narration, new cast, or forced sequel tease.`],
+    ];
+  } else {
+    source = [
+      ["Opening image", `A cinematic opening shot. Establish the main character, location, time of day, and the question that pulls us forward. Describe exact blocking, camera movement, lighting, dialogue, ambience, and sound effects. Preserve every supplied reference identity. No subtitles, narration, interface text, duplicate subjects, or unexplained cuts.`],
+      ["Change", `Continue the previous scene without replaying its completed action. Show one meaningful choice or change through a clear sequence of visible actions. Preserve geography, screen direction, wardrobe, lighting logic, and all supplied identities. Direct the camera, dialogue, ambience, and tactile sounds. No subtitles or interface text.`],
+      ["Resolution", `Continue exactly from the previous shot. Resolve the immediate action and land on a memorable final image. Leave a subtle visual possibility for another scene while making this sequence feel complete. Preserve all reference identities, native stereo sound, and natural dialogue. No subtitles or interface text.`],
+    ];
+  }
+  return source.map(([title, prompt], index) => ({
+    id: newLocalId(),
+    title,
+    prompt,
+    duration: 10,
+    seed: seeds[index],
+    sceneReference: null,
+  }));
 }
 
 function cloneSeriesShots(shots) {
-  return shots.map((shot) => ({ ...shot }));
+  return shots.map((shot) => ({
+    ...shot,
+    sceneReference: shot.sceneReference ? { ...shot.sceneReference, metadata: { ...(shot.sceneReference.metadata || {}) } } : null,
+  }));
 }
 
 function normalizeDraftShots(shots) {
@@ -834,12 +877,46 @@ function normalizeDraftShots(shots) {
     prompt: String(shot?.prompt || "").slice(0, 10000),
     duration: Math.min(15, Math.max(5, Number(shot?.duration) || 10)),
     seed: /^[0-9]+$/.test(String(shot?.seed || "")) ? String(shot.seed) : String(20260828 + index),
+    sceneReference: normalizeDraftAsset(shot?.sceneReference),
   }));
   return normalized.length >= 2 ? normalized : null;
 }
 
 function seriesReferenceLabels() {
-  return state.series.template === "lalachan" ? LALACHAN_REFERENCES : MOVIE_REFERENCES;
+  if (state.series.template === "movie") return MOVIE_REFERENCES;
+  if (state.series.template === "world_travel") return WORLD_TRAVEL_REFERENCES;
+  return LALACHAN_REFERENCES;
+}
+
+function isWorldTravel() {
+  return state.series.template === "world_travel";
+}
+
+function seriesTemplateLabel(template = state.series.template) {
+  return SERIES_TEMPLATE_LABELS[template] || "Series";
+}
+
+function sceneReferenceLabel(shot, index = state.series.shots.indexOf(shot)) {
+  const title = String(shot?.title || `Shot ${index + 1}`).trim();
+  return `${title || `Shot ${index + 1}`} · location plate`;
+}
+
+function findSeriesShotById(id) {
+  const active = state.series.shots.find((shot) => shot.id === id);
+  if (active) return active;
+  for (const shots of Object.values(state.series.templateShots)) {
+    const found = Array.isArray(shots) ? shots.find((shot) => shot.id === id) : null;
+    if (found) return found;
+  }
+  return null;
+}
+
+function sceneReferencesInDrafts() {
+  const shots = [...state.series.shots];
+  for (const templateShots of Object.values(state.series.templateShots)) {
+    if (Array.isArray(templateShots)) shots.push(...templateShots);
+  }
+  return shots.map((shot) => shot.sceneReference).filter(Boolean);
 }
 
 function normalizeDraftAsset(asset) {
@@ -856,8 +933,13 @@ function normalizeDraftAsset(asset) {
 
 function restoredSeriesUploads() {
   const uploads = [];
+  const seen = new Set();
   const add = (asset, kind) => {
-    if (asset?.token) uploads.push({ token: asset.token, kind });
+    const key = asset?.token ? `${kind}:${asset.token}` : "";
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      uploads.push({ token: asset.token, kind });
+    }
   };
   state.series.canonical.forEach((asset) => add(asset, "image"));
   state.series.extras.images.forEach((asset) => add(asset, "image"));
@@ -866,6 +948,7 @@ function restoredSeriesUploads() {
     add(asset.soundtrack, "audio");
   });
   state.series.extras.audio.forEach((asset) => add(asset, "audio"));
+  sceneReferencesInDrafts().forEach((asset) => add(asset, "image"));
   return uploads;
 }
 
@@ -888,10 +971,10 @@ async function validateRestoredSeriesAssets() {
     });
     if (version !== state.series.assetValidationVersion) return;
     const valid = new Set(Array.isArray(result.valid) ? result.valid : []);
-    let expired = 0;
+    const invalidTokens = new Set([...checkedTokens].filter((token) => !valid.has(token)));
+    const expired = invalidTokens.size;
     const keep = (asset) => {
-      if (!asset || !checkedTokens.has(asset.token) || valid.has(asset.token)) return asset;
-      expired += 1;
+      if (!asset || !invalidTokens.has(asset.token)) return asset;
       return null;
     };
     state.series.canonical = state.series.canonical.map(keep);
@@ -903,10 +986,17 @@ async function validateRestoredSeriesAssets() {
       return video;
     }).filter(Boolean);
     state.series.extras.audio = state.series.extras.audio.map(keep).filter(Boolean);
+    const cleanShotScenes = (shots) => {
+      if (!Array.isArray(shots)) return shots;
+      shots.forEach((shot) => { shot.sceneReference = keep(shot.sceneReference); });
+      return shots;
+    };
+    cleanShotScenes(state.series.shots);
+    for (const template of SERIES_TEMPLATES) cleanShotScenes(state.series.templateShots[template]);
     state.series.assetValidation = "verified";
     renderCanonicalReferences();
     renderSeriesExtraAssets();
-    updateSeriesReview();
+    renderSeriesShots();
     if (expired) {
       setSeriesMessage(`${expired} saved reference${expired === 1 ? " has" : "s have"} expired. Upload ${expired === 1 ? "it" : "them"} again before generating.`, "error");
       saveSeriesDraftSoon();
@@ -965,13 +1055,13 @@ function setupSeriesConfig(config) {
 function restoreSeriesDraft() {
   let draft = null;
   try { draft = JSON.parse(localStorage.getItem(SERIES_DRAFT_KEY) || "null"); } catch { draft = null; }
-  if (!draft || typeof draft !== "object" || !["lalachan", "movie"].includes(draft.template)) return;
+  if (!draft || typeof draft !== "object" || !SERIES_TEMPLATES.includes(draft.template)) return;
   state.series.template = draft.template;
   state.series.canonical = Array(7).fill(null).map((_, index) => normalizeDraftAsset(draft.canonical?.[index]));
   for (const key of ["images", "videos", "audio"]) {
     state.series.extras[key] = Array.isArray(draft.extras?.[key]) ? draft.extras[key].map(normalizeDraftAsset).filter(Boolean) : [];
   }
-  for (const template of ["lalachan", "movie"]) {
+  for (const template of SERIES_TEMPLATES) {
     state.series.templateShots[template] = normalizeDraftShots(draft.templateShots?.[template]);
   }
   state.series.shots = normalizeDraftShots(draft.shots)
@@ -1038,24 +1128,30 @@ function switchWorkflow(workflow, { focus = true } = {}) {
 }
 
 function applySeriesTemplate(template) {
-  if (!["lalachan", "movie"].includes(template) || template === state.series.template) return;
+  if (!SERIES_TEMPLATES.includes(template) || template === state.series.template) return;
   const previous = state.series.template;
   state.series.templateShots[previous] = cloneSeriesShots(state.series.shots);
   state.series.template = template;
   state.series.shots = cloneSeriesShots(state.series.templateShots[template] || defaultSeriesShots(template));
   state.series.templateShots[template] = cloneSeriesShots(state.series.shots);
-  if (template === "movie" && elements.seriesTitle.value === "New LALACHAN episode") elements.seriesTitle.value = "My movie";
-  if (template === "lalachan" && elements.seriesTitle.value === "My movie") elements.seriesTitle.value = "New LALACHAN episode";
+  if (elements.seriesTitle.value === SERIES_TEMPLATE_TITLES[previous]) {
+    elements.seriesTitle.value = SERIES_TEMPLATE_TITLES[template];
+  }
+  if (isWorldTravel() && elements.seriesContinuity.value === "0") elements.seriesContinuity.value = "3";
   renderSeriesTemplate();
   renderCanonicalReferences();
+  renderSeriesExtraAssets();
   renderSeriesShots();
-  updateSeriesReview();
-  if (seriesSharedImageCount() > 8) {
+  if (!isWorldTravel() && seriesSharedImageCount() > 8) {
     setSeriesMessage("This template exposes more than eight shared pictures. Remove extras before preflight can pass; no upload was deleted.", "error");
   } else {
-    setSeriesMessage(`Switched to ${template === "lalachan" ? "LALACHAN Series" : "My Movie"}. Your ${previous === "lalachan" ? "LALACHAN" : "My Movie"} storyboard is preserved.`, "success");
+    const parked = isWorldTravel() && state.series.extras.images.length
+      ? ` ${state.series.extras.images.length} extra picture${state.series.extras.images.length === 1 ? " is" : "s are"} parked and will not shift P8/P9.`
+      : "";
+    setSeriesMessage(`Switched to ${seriesTemplateLabel(template)}. Your ${seriesTemplateLabel(previous)} storyboard is preserved.${parked}`, "success");
   }
   saveSeriesDraftSoon();
+  refreshSeriesAssetValidation();
 }
 
 function renderSeriesTemplate() {
@@ -1063,6 +1159,20 @@ function renderSeriesTemplate() {
     radio.checked = radio.value === state.series.template;
     radio.closest(".preset-card")?.classList.toggle("selected", radio.checked);
   }
+  const travel = isWorldTravel();
+  if (travel && elements.seriesContinuity.value === "0") elements.seriesContinuity.value = "3";
+  elements.worldTravelIdentityGuard.hidden = !travel;
+  elements.seriesExtraImagesDrop.hidden = travel;
+  elements.seriesExtraImages.disabled = travel;
+  elements.seriesMoreReferencesSummary.textContent = travel
+    ? "Add identity/voice guidance from earlier episodes"
+    : "Add movement, voice, music, or extra pictures";
+  const off = elements.seriesContinuity.querySelector('option[value="0"]');
+  if (off) off.disabled = travel;
+  elements.seriesCastTitle.textContent = travel ? "Shared cast & identity" : "Shared cast & world";
+  elements.seriesCastDescription.textContent = travel
+    ? "P1–P7 stay fixed across the journey. Each shot gets its own location plate as P8; continuity arrives as P9."
+    : "Upload once. Every shot receives the shared references, and each shot card shows its exact prompt tags.";
 }
 
 function bindFileDrop(zone, input) {
@@ -1148,14 +1258,12 @@ async function handleCanonicalUpload(index, input, slot) {
   }
   slot.classList.add("uploading");
   state.series.uploading += 1;
-  let uploaded = false;
   setSeriesMessage(`Uploading ${file.name}…`);
   updateSeriesReview();
   try {
     const record = await uploadFile(file, "image");
     record.label = seriesReferenceLabels()[index]?.[0] || `Picture ${index + 1}`;
     state.series.canonical[index] = record;
-    uploaded = true;
     setSeriesMessage(`${record.label} is ready.`, "success");
   } catch (error) {
     setSeriesMessage(error.message, "error");
@@ -1164,22 +1272,28 @@ async function handleCanonicalUpload(index, input, slot) {
     renderCanonicalReferences();
     updateSeriesReview();
     saveSeriesDraftSoon();
-    if (uploaded) refreshSeriesAssetValidation();
+    refreshSeriesAssetValidation();
   }
 }
 
 function seriesReadyAssets() {
   const visibleCanonical = state.series.canonical.slice(0, seriesReferenceLabels().length).filter(Boolean);
-  return visibleCanonical.length + state.series.extras.images.length + state.series.extras.videos.length + state.series.extras.audio.length;
+  const activeExtraImages = isWorldTravel() ? 0 : state.series.extras.images.length;
+  return visibleCanonical.length + activeExtraImages + state.series.extras.videos.length + state.series.extras.audio.length;
 }
 
 function seriesSharedImageCount() {
-  return state.series.canonical.slice(0, seriesReferenceLabels().length).filter(Boolean).length + state.series.extras.images.length;
+  const activeExtraImages = isWorldTravel() ? 0 : state.series.extras.images.length;
+  return state.series.canonical.slice(0, seriesReferenceLabels().length).filter(Boolean).length + activeExtraImages;
+}
+
+function seriesReadySceneCount() {
+  return isWorldTravel() ? state.series.shots.filter((shot) => shot.sceneReference?.token).length : 0;
 }
 
 function updateSeriesAssetCount() {
   const count = seriesReadyAssets();
-  elements.seriesAssetCount.textContent = `${count} ready`;
+  elements.seriesAssetCount.textContent = isWorldTravel() ? `${count} shared · ${seriesReadySceneCount()} scenes` : `${count} ready`;
 }
 
 async function handleSeriesExtraUpload(input) {
@@ -1187,6 +1301,11 @@ async function handleSeriesExtraUpload(input) {
   const key = kind === "image" ? "images" : kind === "video" ? "videos" : "audio";
   const files = [...(input.files || [])];
   if (!files.length) return;
+  if (isWorldTravel() && key === "images") {
+    input.value = "";
+    setSeriesMessage("World Travel reserves P8 for each shot's own scene plate and P9 for continuity. Add location pictures inside the shot cards.", "error");
+    return;
+  }
   const canonicalCount = state.series.canonical.slice(0, seriesReferenceLabels().length).filter(Boolean).length;
   const limits = { images: Math.max(0, 8 - canonicalCount), videos: 2, audio: 3 };
   const remaining = Math.max(0, limits[key] - state.series.extras[key].length);
@@ -1229,7 +1348,7 @@ async function handleSeriesExtraUpload(input) {
   renderCanonicalReferences();
   updateSeriesReview();
   saveSeriesDraftSoon();
-  if (uploaded) refreshSeriesAssetValidation();
+  refreshSeriesAssetValidation();
 }
 
 async function attachSeriesVideoSoundtrack(index) {
@@ -1241,12 +1360,10 @@ async function attachSeriesVideoSoundtrack(index) {
     const video = state.series.extras.videos[index];
     if (!file || !video) return;
     state.series.uploading += 1;
-    let attached = false;
     updateSeriesReview();
     setSeriesMessage(`Uploading ${file.name}…`);
     try {
       video.soundtrack = await uploadFile(file, "audio");
-      attached = true;
       setSeriesMessage(`Soundtrack attached to ${video.name}.`, "success");
       renderSeriesExtraAssets();
       saveSeriesDraftSoon();
@@ -1255,7 +1372,7 @@ async function attachSeriesVideoSoundtrack(index) {
     } finally {
       state.series.uploading -= 1;
       updateSeriesReview();
-      if (attached) refreshSeriesAssetValidation();
+      refreshSeriesAssetValidation();
     }
   }, { once: true });
   input.click();
@@ -1267,9 +1384,13 @@ function renderSeriesExtraAssets() {
   for (const [key, short, label] of groups) {
     state.series.extras[key].forEach((asset, index) => {
       const card = $("#assetTemplate").content.firstElementChild.cloneNode(true);
+      const parked = isWorldTravel() && key === "images";
+      card.classList.toggle("parked", parked);
       $(".asset-kind", card).textContent = short;
       $(".asset-copy strong", card).textContent = asset.label || asset.name;
-      $(".asset-copy small", card).textContent = `${label} · ${asset.name} · ${formatBytes(asset.size)}`;
+      $(".asset-copy small", card).textContent = parked
+        ? `${label} · parked for this template · preserved for other drafts`
+        : `${label} · ${asset.name} · ${formatBytes(asset.size)}`;
       $(".remove-asset", card).setAttribute("aria-label", `Remove ${asset.name}`);
       $(".remove-asset", card).addEventListener("click", () => {
         state.series.extras[key].splice(index, 1);
@@ -1320,6 +1441,138 @@ function shotActionButton(label, text, handler, { disabled = false, className = 
   button.disabled = disabled;
   button.addEventListener("click", handler);
   return button;
+}
+
+function reusableSceneReferences(currentShotId) {
+  const unique = new Map();
+  state.series.shots.forEach((shot, index) => {
+    const asset = shot.sceneReference;
+    if (shot.id === currentShotId || !asset?.token || unique.has(asset.token)) return;
+    unique.set(asset.token, { asset, source: shot.title || `Shot ${index + 1}` });
+  });
+  return [...unique.values()];
+}
+
+function setShotSceneReference(shotId, asset, message) {
+  const shot = findSeriesShotById(shotId);
+  if (!shot) return;
+  shot.sceneReference = asset ? { ...asset, metadata: { ...(asset.metadata || {}) } } : null;
+  if (state.series.shots.some((item) => item.id === shotId)) renderSeriesShots();
+  else updateSeriesReview();
+  if (message) setSeriesMessage(message, "success");
+  saveSeriesDraftSoon();
+}
+
+async function handleShotSceneUpload(shotId, input, zone) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const version = (state.series.sceneUploadVersions.get(shotId) || 0) + 1;
+  state.series.sceneUploadVersions.set(shotId, version);
+  state.series.uploading += 1;
+  zone.classList.add("uploading");
+  setSeriesMessage(`Uploading ${file.name} as this shot's P8 scene plate…`);
+  updateSeriesReview();
+  try {
+    const record = await uploadFile(file, "image");
+    const shot = findSeriesShotById(shotId);
+    if (!shot || state.series.sceneUploadVersions.get(shotId) !== version) return;
+    record.label = sceneReferenceLabel(shot);
+    shot.sceneReference = record;
+    setSeriesMessage(`${file.name} is locked to this shot as P8.`, "success");
+  } catch (error) {
+    if (state.series.sceneUploadVersions.get(shotId) === version) setSeriesMessage(error.message, "error");
+  } finally {
+    state.series.uploading -= 1;
+    input.value = "";
+    if (state.series.shots.some((shot) => shot.id === shotId)) renderSeriesShots();
+    else updateSeriesReview();
+    saveSeriesDraftSoon();
+    refreshSeriesAssetValidation();
+  }
+}
+
+function renderShotSceneReference(shot, index) {
+  const asset = shot.sceneReference;
+  const editor = document.createElement("section");
+  editor.className = `scene-reference-editor${asset ? " ready" : " missing"}`;
+  editor.setAttribute("aria-label", `Shot ${index + 1} scene reference`);
+
+  const heading = document.createElement("div");
+  heading.className = "scene-reference-heading";
+  const tag = document.createElement("span");
+  tag.className = "scene-reference-tag";
+  tag.textContent = "P8";
+  const copy = document.createElement("div");
+  const strong = document.createElement("strong");
+  strong.textContent = "Shot-only location plate";
+  const small = document.createElement("small");
+  small.textContent = asset
+    ? `${asset.name} · ${formatBytes(asset.size)}`
+    : "Required: architecture, terrain, light, and atmosphere for this shot";
+  copy.append(strong, small);
+  heading.append(tag, copy);
+
+  const controls = document.createElement("div");
+  controls.className = "scene-reference-controls";
+  const zone = document.createElement("label");
+  zone.className = "scene-reference-drop";
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg,image/webp,image/bmp";
+  input.setAttribute("aria-label", `${asset ? "Replace" : "Upload"} Shot ${index + 1} P8 location plate`);
+  input.addEventListener("change", () => handleShotSceneUpload(shot.id, input, zone));
+  const uploadCopy = document.createElement("span");
+  uploadCopy.textContent = asset ? "Replace plate" : "Upload scene plate";
+  zone.append(input, uploadCopy);
+  bindFileDrop(zone, input);
+  controls.append(zone);
+
+  const reusable = reusableSceneReferences(shot.id);
+  if (reusable.length) {
+    const reuse = document.createElement("select");
+    reuse.className = "scene-reference-reuse";
+    reuse.setAttribute("aria-label", `Reuse another scene plate for Shot ${index + 1}`);
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Reuse another shot's plate…";
+    placeholder.selected = true;
+    placeholder.disabled = true;
+    reuse.append(placeholder);
+    reusable.forEach(({ asset: candidate, source }) => {
+      const option = document.createElement("option");
+      option.value = candidate.token;
+      option.textContent = `${source} · ${candidate.name}`;
+      reuse.append(option);
+    });
+    reuse.addEventListener("change", () => {
+      const selected = reusable.find(({ asset: candidate }) => candidate.token === reuse.value);
+      if (!selected) return;
+      setShotSceneReference(shot.id, selected.asset, `Reused ${selected.asset.name} as Shot ${index + 1}'s P8 plate.`);
+      refreshSeriesAssetValidation();
+    });
+    controls.append(reuse);
+  }
+
+  if (asset) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "scene-reference-remove";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove Shot ${index + 1} P8 location plate`);
+    remove.addEventListener("click", () => {
+      state.series.sceneUploadVersions.set(shot.id, (state.series.sceneUploadVersions.get(shot.id) || 0) + 1);
+      setShotSceneReference(shot.id, null);
+      setSeriesMessage(`Shot ${index + 1} needs a new P8 scene plate. The uploaded file was not deleted.`, "error");
+      refreshSeriesAssetValidation();
+    });
+    controls.append(remove);
+  }
+
+  const guard = document.createElement("p");
+  guard.className = "scene-reference-guard";
+  guard.textContent = "P8 controls only this place. It must not change the cast; the next destination gets its own P8.";
+  editor.append(heading, controls, guard);
+  return editor;
 }
 
 function renderSeriesShots() {
@@ -1419,13 +1672,16 @@ function renderSeriesShots() {
     seed.addEventListener("input", () => updateShotState(shot.id, "seed", seed.value));
     seedLabel.append(seedText, seed);
     settings.append(durationLabel, seedLabel);
+    if (isWorldTravel()) body.append(renderShotSceneReference(shot, index));
     body.append(promptLabel, prompt, referenceMap, settings);
 
     if (index > 0) {
       const continuity = document.createElement("p");
       continuity.className = "shot-continuity-note";
       const seconds = Number(elements.seriesContinuity.value || 3);
-      continuity.textContent = seconds ? `Automatically receives the previous shot's last ${seconds} seconds and final frame.` : "Continuity handoff is currently off.";
+      continuity.textContent = seconds
+        ? `${isWorldTravel() ? "P9 is" : "Automatically receives"} the previous shot's exact final frame; its last ${seconds} seconds also carry movement and stereo sound.`
+        : "Continuity handoff is currently off.";
       body.append(continuity);
     }
     card.append(header, body);
@@ -1443,9 +1699,12 @@ function addSeriesShot() {
   state.series.shots.push({
     id: newLocalId(),
     title: `Shot ${state.series.shots.length + 1}`,
-    prompt: `Continue the previous scene without replaying its completed action. Preserve all supplied identities, geography, screen direction, wardrobe, lighting logic, and audio space. Describe the next clear action, camera direction, exact dialogue, ambience, sound effects, and the final composition. No subtitles or interface text.`,
+    prompt: isWorldTravel()
+      ? `Continue from <Picture 9> without replaying its completed action. Use <Picture 8> only as this shot's destination, architecture, terrain, light, and atmosphere anchor. Advance the same motivated journey through one visible discovery, one concise historical or cultural connection, and natural Chinese dialogue. Preserve the four travelers, route logic, screen direction, time progression, wardrobe, voices, carried props, and native stereo sound. Do not copy any earlier episode's country, plot, actions, blocking, landmarks, palette, or composition. No subtitles, narration, tourist-checklist montage, or extra cast.`
+      : `Continue the previous scene without replaying its completed action. Preserve all supplied identities, geography, screen direction, wardrobe, lighting logic, and audio space. Describe the next clear action, camera direction, exact dialogue, ambience, sound effects, and the final composition. No subtitles or interface text.`,
     duration: Number(previous?.duration) || 10,
     seed: nextSeed.toString(),
+    sceneReference: null,
   });
   renderSeriesShots();
   saveSeriesDraftSoon();
@@ -1457,7 +1716,13 @@ function duplicateSeriesShot(index) {
   const source = state.series.shots[index];
   let nextSeed = BigInt(/^[0-9]+$/.test(source.seed) ? source.seed : "1") + 1n;
   if (nextSeed > MAX_SEED) nextSeed = 1n;
-  state.series.shots.splice(index + 1, 0, { ...source, id: newLocalId(), title: `${source.title} copy`, seed: nextSeed.toString() });
+  state.series.shots.splice(index + 1, 0, {
+    ...source,
+    id: newLocalId(),
+    title: `${source.title} copy`,
+    seed: nextSeed.toString(),
+    sceneReference: source.sceneReference ? { ...source.sceneReference, metadata: { ...(source.sceneReference.metadata || {}) } } : null,
+  });
   renderSeriesShots();
   saveSeriesDraftSoon();
 }
@@ -1466,6 +1731,7 @@ function deleteSeriesShot(index) {
   const shot = state.series.shots[index];
   if (!shot || state.series.shots.length <= 2) return;
   if (!confirm(`Remove “${shot.title || `Shot ${index + 1}`}” from this draft?`)) return;
+  state.series.sceneUploadVersions.set(shot.id, (state.series.sceneUploadVersions.get(shot.id) || 0) + 1);
   state.series.shots.splice(index, 1);
   renderSeriesShots();
   saveSeriesDraftSoon();
@@ -1486,11 +1752,21 @@ function seriesBlockingStatus(status) {
 }
 
 function seriesReferenceMapForShot(shotIndex) {
-  const imageLabels = [];
-  state.series.canonical.slice(0, seriesReferenceLabels().length).forEach((asset, index) => {
-    if (asset) imageLabels.push(seriesReferenceLabels()[index][0]);
-  });
-  state.series.extras.images.forEach((asset) => imageLabels.push((asset.label || asset.name).trim()));
+  const pictureLabels = [];
+  if (isWorldTravel()) {
+    state.series.canonical.slice(0, WORLD_TRAVEL_REFERENCES.length).forEach((asset, index) => {
+      if (asset) pictureLabels.push([index + 1, WORLD_TRAVEL_REFERENCES[index][0]]);
+    });
+    const shot = state.series.shots[shotIndex];
+    if (shot?.sceneReference) pictureLabels.push([8, sceneReferenceLabel(shot, shotIndex)]);
+  } else {
+    const sequential = [];
+    state.series.canonical.slice(0, seriesReferenceLabels().length).forEach((asset, index) => {
+      if (asset) sequential.push(seriesReferenceLabels()[index][0]);
+    });
+    state.series.extras.images.forEach((asset) => sequential.push((asset.label || asset.name).trim()));
+    sequential.forEach((label, index) => pictureLabels.push([index + 1, label]));
+  }
 
   const videos = state.series.extras.videos.map((asset) => {
     const label = (asset.label || asset.name).trim();
@@ -1499,11 +1775,11 @@ function seriesReferenceMapForShot(shotIndex) {
   });
   const continuitySeconds = Number(elements.seriesContinuity.value);
   if (shotIndex > 0 && continuitySeconds) {
-    imageLabels.push("previous shot's exact final frame");
+    pictureLabels.push([isWorldTravel() ? 9 : pictureLabels.length + 1, "previous shot's exact final frame"]);
     videos.push([`previous shot's final ${continuitySeconds} seconds`, "stereo audio from the previous shot continuity tail"]);
   }
 
-  const labels = imageLabels.map((label, index) => `<Picture ${index + 1}> = ${label}`);
+  const labels = pictureLabels.map(([ordinal, label]) => `<Picture ${ordinal}> = ${label}`);
   let audioIndex = 1;
   videos.forEach(([videoLabel, audioLabel], index) => {
     if (audioLabel) labels.push(`<Audio ${audioIndex++}> = ${audioLabel}`);
@@ -1540,9 +1816,14 @@ function updateShotReferenceMaps() {
 }
 
 function composedSeriesPromptLength(shot, shotIndex) {
-  const guidance = state.series.template === "lalachan"
-    ? "LALACHAN series continuity: keep every named character's species, human face, costume, scale, voice and relationships exact across shots. Use natural Chinese dialogue and clear screen direction; do not add, merge, duplicate or replace cast members."
-    : "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, voices and the previous shot's final action.";
+  let guidance;
+  if (state.series.template === "lalachan") {
+    guidance = "LALACHAN series continuity: keep every named character's species, human face, costume, scale, voice and relationships exact across shots. Use natural Chinese dialogue and clear screen direction; do not add, merge, duplicate or replace cast members.";
+  } else if (isWorldTravel()) {
+    guidance = "LALACHAN World Travel continuity: lock every named character's identity, species, human face, body scale, wardrobe, accessories, relationships and voice across the whole journey. Keep the stated travel route, geography, screen direction, time progression and carried props coherent. Pictures 1-7 are shared identity and series-style anchors only. Picture 8 is the location, architecture, terrain, light and atmosphere anchor for this shot only; do not carry its place-specific details into another destination. Any earlier-episode, video or audio reference may guide character appearance or voice timbre only: never copy its country, plot, story direction, actions, blocking, landmarks or visual composition. Use natural concise dialogue and let one motivated journey connect the history and sights instead of presenting an unrelated tourist checklist.";
+  } else {
+    guidance = "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, voices and the previous shot's final action.";
+  }
   const continuity = shotIndex > 0 && Number(elements.seriesContinuity.value)
     ? " Continue directly and seamlessly from the previous-shot reference tail; do not replay its completed action."
     : "";
@@ -1568,11 +1849,22 @@ function unresolvedSeriesPromptTags() {
       video: sharedVideos + (hasContinuity ? 1 : 0),
       audio: sharedAudio + (hasContinuity ? 1 : 0),
     };
+    const worldPictures = new Set();
+    if (isWorldTravel()) {
+      state.series.canonical.slice(0, WORLD_TRAVEL_REFERENCES.length).forEach((asset, index) => {
+        if (asset) worldPictures.add(index + 1);
+      });
+      if (shot.sceneReference) worldPictures.add(8);
+      if (hasContinuity) worldPictures.add(9);
+    }
     const text = `${elements.seriesBrief.value}\n${shot.prompt}`;
     for (const match of text.matchAll(/<(Picture|Video|Audio)\s+([0-9]+)>/gi)) {
       const kind = match[1].toLowerCase();
       const ordinal = Number(match[2]);
-      if (ordinal < 1 || ordinal > limits[kind]) unresolved.push(`Shot ${shotIndex + 1}: <${match[1]} ${match[2]}>`);
+      const resolved = kind === "picture" && isWorldTravel()
+        ? worldPictures.has(ordinal)
+        : ordinal >= 1 && ordinal <= limits[kind];
+      if (!resolved) unresolved.push(`Shot ${shotIndex + 1}: <${match[1]} ${match[2]}>`);
     }
   });
   return [...new Set(unresolved)];
@@ -1632,16 +1924,33 @@ function seriesDraftChecks() {
 
   const canonicalReady = state.series.canonical.slice(0, seriesReferenceLabels().length).filter(Boolean).length;
   const sharedImageCount = seriesSharedImageCount();
-  add(sharedImageCount <= 8 ? "ok" : "error",
-    sharedImageCount <= 8 ? `${sharedImageCount} of 8 shared picture slots used` : `${sharedImageCount - 8} too many shared pictures`,
-    sharedImageCount <= 8
-      ? "Picture 9 remains reserved for the previous shot's final frame."
-      : "Remove extra pictures until no more than eight shared images remain; uploads are preserved until you choose which handles to remove.");
+  if (isWorldTravel()) {
+    add(canonicalReady === WORLD_TRAVEL_REFERENCES.length ? "ok" : "error",
+      canonicalReady === WORLD_TRAVEL_REFERENCES.length ? "World Travel identity set is complete" : `${WORLD_TRAVEL_REFERENCES.length - canonicalReady} shared P1–P7 reference${WORLD_TRAVEL_REFERENCES.length - canonicalReady === 1 ? " is" : "s are"} missing`,
+      "The seven canonical slots keep characters, recurring props, and series style stable without steering the destination story.");
+    const sceneReady = seriesReadySceneCount();
+    add(sceneReady === state.series.shots.length ? "ok" : "error",
+      sceneReady === state.series.shots.length ? `All ${sceneReady} shot-specific P8 plates are ready` : `${state.series.shots.length - sceneReady} shot-specific P8 plate${state.series.shots.length - sceneReady === 1 ? " is" : "s are"} missing`,
+      "Every shot needs its own location, architecture, terrain, light, and atmosphere image; reorder and duplicate operations keep the plate attached to its shot.");
+    const continuityReady = Number(elements.seriesContinuity.value) > 0;
+    add(continuityReady ? "ok" : "error",
+      continuityReady ? "P9 continuity is reserved" : "Turn on World Travel continuity",
+      continuityReady ? "From Shot 2 onward, P9 is always the previous shot's exact final frame." : "Choose a 2–4 second handoff so the previous final frame has the stable P9 position.");
+    if (state.series.extras.images.length) {
+      add("warn", `${state.series.extras.images.length} extra shared picture${state.series.extras.images.length === 1 ? " is" : "s are"} parked`, "They are preserved for LALACHAN Series and My Movie but are not sent here, so the scene plate stays P8 and continuity stays P9.");
+    }
+  } else {
+    add(sharedImageCount <= 8 ? "ok" : "error",
+      sharedImageCount <= 8 ? `${sharedImageCount} of 8 shared picture slots used` : `${sharedImageCount - 8} too many shared pictures`,
+      sharedImageCount <= 8
+        ? "Picture 9 remains reserved for the previous shot's final frame."
+        : "Remove extra pictures until no more than eight shared images remain; uploads are preserved until you choose which handles to remove.");
+  }
   if (state.series.template === "lalachan") {
     add(canonicalReady === LALACHAN_REFERENCES.length ? "ok" : "error",
       canonicalReady === LALACHAN_REFERENCES.length ? "LALACHAN cast is complete" : `${LALACHAN_REFERENCES.length - canonicalReady} LALACHAN reference${LALACHAN_REFERENCES.length - canonicalReady === 1 ? " is" : "s are"} missing`,
       "All seven fixed picture positions keep names and prompt tags stable across the series.");
-  } else {
+  } else if (state.series.template === "movie") {
     const movieSlots = state.series.canonical.slice(0, MOVIE_REFERENCES.length);
     const firstGap = movieSlots.findIndex((asset) => !asset);
     const hasNumberingGap = firstGap >= 0 && movieSlots.slice(firstGap + 1).some(Boolean);
@@ -1653,7 +1962,7 @@ function seriesDraftChecks() {
   add(engineReady ? "ok" : "error", engineReady ? "Local H3 engine is ready" : "Local H3 engine needs attention", engineReady ? "Shots will run sequentially; no second heavy render is launched." : state.health?.message || "Start the verified local runtime before generating.");
   const profile = state.config?.profiles.find((item) => item.id === elements.seriesProfile.value);
   if (profile?.dual_gpu && deviceCount() < 2) add("error", "Maximum quality needs both GPUs", "Choose a single-GPU profile or make both RTX 4090 devices available.");
-  if (state.series.uploading) add("error", "Uploads are still processing", `Wait for ${state.series.uploading} shared upload${state.series.uploading === 1 ? "" : "s"} to finish.`);
+  if (state.series.uploading) add("error", "Uploads are still processing", `Wait for ${state.series.uploading} reference upload${state.series.uploading === 1 ? "" : "s"} to finish.`);
   if (state.series.assetValidation !== "verified") {
     add(
       "error",
@@ -1726,12 +2035,14 @@ function updateSeriesReview() {
     elements.seriesStatusBadge.className = "series-status-badge draft";
     elements.seriesSummaryText.textContent = state.series.template === "lalachan"
       ? "Seven stable cast slots, editable shot cards, and an automatic continuity handoff between scenes."
-      : "A flexible local storyboard for your own cast, world, and movie.";
+      : isWorldTravel()
+        ? "Seven shared identity anchors, one destination plate per shot, and stable P8/P9 handoffs across the journey."
+        : "A flexible local storyboard for your own cast, world, and movie.";
     renderSeriesMetrics([
-      ["Template", state.series.template === "lalachan" ? "LALACHAN" : "My Movie"],
+      ["Template", seriesTemplateLabel()],
       ["Timeline", `${state.series.shots.length} shots`],
       ["Actual length", `${totals.seconds.toFixed(2)} s`],
-      ["Shared assets", String(seriesReadyAssets())],
+      [isWorldTravel() ? "P8 scene plates" : "Shared assets", String(isWorldTravel() ? seriesReadySceneCount() : seriesReadyAssets())],
     ]);
     updateDraftTimeline();
   }
@@ -1760,7 +2071,7 @@ function seriesPayload() {
   state.series.canonical.slice(0, seriesReferenceLabels().length).forEach((asset, index) => {
     if (asset) images.push({ token: asset.token, label: seriesReferenceLabels()[index][0] });
   });
-  state.series.extras.images.forEach((asset) => images.push({ token: asset.token, label: asset.label || asset.name }));
+  if (!isWorldTravel()) state.series.extras.images.forEach((asset) => images.push({ token: asset.token, label: asset.label || asset.name }));
   return {
     title: elements.seriesTitle.value.trim(),
     brief: elements.seriesBrief.value.trim(),
@@ -1778,7 +2089,18 @@ function seriesPayload() {
       videos: state.series.extras.videos.map((asset) => ({ token: asset.token, label: asset.label || asset.name, soundtrack: asset.soundtrack?.token || null })),
       audio: state.series.extras.audio.map((asset) => ({ token: asset.token, label: asset.label || asset.name })),
     },
-    shots: state.series.shots.map((shot) => ({ title: shot.title.trim(), prompt: shot.prompt.trim(), duration: Number(shot.duration), seed: String(shot.seed).trim() })),
+    shots: state.series.shots.map((shot, index) => ({
+      title: shot.title.trim(),
+      prompt: shot.prompt.trim(),
+      duration: Number(shot.duration),
+      seed: String(shot.seed).trim(),
+      ...(isWorldTravel() ? {
+        scene_reference: {
+          token: shot.sceneReference?.token || "",
+          label: sceneReferenceLabel(shot, index),
+        },
+      } : {}),
+    })),
   };
 }
 

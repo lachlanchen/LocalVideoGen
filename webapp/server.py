@@ -69,6 +69,7 @@ SERIES_MEDIA_KEY = web.AppKey("h3.series_media")
 SERIES_RUNNER_KEY = web.AppKey("h3.series_runner")
 SUBMISSION_LOCK_KEY = web.AppKey("h3.submission_lock")
 MISSING_JOB_GRACE_MS = 5 * 60 * 1000
+SERIES_API_VERSION = 1
 
 UPLOAD_RULES: dict[str, dict[str, Any]] = {
     "image": {
@@ -589,6 +590,11 @@ def create_app(
         submission_lock=app[SUBMISSION_LOCK_KEY],
         runtime_check=verify_series_runtime,
         submission_check=verify_series_submission,
+        input_root=(
+            PROJECT_ROOT / "ComfyUI" / "input"
+            if isinstance(app[COMFY_KEY], ComfyClient)
+            else None
+        ),
     )
 
     async def watch_jobs(application: web.Application) -> None:
@@ -654,9 +660,76 @@ def create_app(
     async def config(_: web.Request) -> web.Response:
         data = public_config()
         data["version"] = __version__
+        data["series_api_version"] = SERIES_API_VERSION
         data["engine_start_command"] = START_ENGINE_COMMAND
+        data["uploads"] = {
+            "multipart_field": "file",
+            "kinds": ["image", "video", "audio"],
+            "normalized_max_bytes": DEFAULT_LIMITS.max_comfy_file_bytes,
+            "image": {
+                "extensions": sorted(UPLOAD_RULES["image"]["extensions"]),
+                "source_max_bytes": DEFAULT_LIMITS.max_image_source_bytes,
+                "source_max_edge": DEFAULT_LIMITS.max_image_edge,
+                "source_max_pixels": DEFAULT_LIMITS.max_image_pixels,
+                "decoded_formats": ["PNG", "JPEG", "WEBP", "BMP"],
+                "single_frame": True,
+                "normalized": {
+                    "format": "PNG",
+                    "content_type": "image/png",
+                },
+            },
+            "video": {
+                "extensions": sorted(UPLOAD_RULES["video"]["extensions"]),
+                "source_max_bytes": DEFAULT_LIMITS.max_video_source_bytes,
+                "source_max_edge": DEFAULT_LIMITS.max_source_video_edge,
+                "source_max_pixels": DEFAULT_LIMITS.max_source_video_pixels,
+                "source_fps": {
+                    "min": DEFAULT_LIMITS.min_source_video_fps,
+                    "max": DEFAULT_LIMITS.max_source_video_fps,
+                },
+                "source_audio_sample_rate_max": (
+                    DEFAULT_LIMITS.max_source_audio_sample_rate
+                ),
+                "source_audio_channels_max": DEFAULT_LIMITS.max_audio_channels,
+                "source_streams_max": DEFAULT_LIMITS.max_streams,
+                "duration_seconds": {
+                    "min": DEFAULT_LIMITS.video_min_seconds,
+                    "max": DEFAULT_LIMITS.video_max_seconds,
+                },
+                "normalized": {
+                    "container": "MP4",
+                    "video_codec": "H.264",
+                    "pixel_format": "yuv420p",
+                    "fps": DEFAULT_LIMITS.video_fps,
+                    "max_edge": DEFAULT_LIMITS.normalized_video_edge,
+                    "audio_optional": True,
+                    "audio_codec": "AAC",
+                    "audio_sample_rate": DEFAULT_LIMITS.audio_sample_rate,
+                    "audio_channels": 2,
+                },
+            },
+            "audio": {
+                "extensions": sorted(UPLOAD_RULES["audio"]["extensions"]),
+                "source_max_bytes": DEFAULT_LIMITS.max_audio_source_bytes,
+                "source_sample_rate_max": (
+                    DEFAULT_LIMITS.max_source_audio_sample_rate
+                ),
+                "source_channels_max": DEFAULT_LIMITS.max_audio_channels,
+                "source_streams_max": DEFAULT_LIMITS.max_streams,
+                "duration_seconds": {
+                    "min": DEFAULT_LIMITS.audio_min_seconds,
+                    "max": DEFAULT_LIMITS.audio_max_seconds,
+                },
+                "normalized": {
+                    "format": "WAV",
+                    "codec": "pcm_s16le",
+                    "sample_rate": DEFAULT_LIMITS.audio_sample_rate,
+                    "channels": 2,
+                },
+            },
+        }
         data["series"] = {
-            "templates": ["lalachan", "movie"],
+            "templates": ["lalachan", "movie", "world_travel"],
             "shot_min": 2,
             "shot_max": 12,
             "total_seconds_max": 180,
@@ -665,7 +738,48 @@ def create_app(
             "shared_audio_max": 3,
             "continuity_seconds": [0, 2, 3, 4],
             "lalachan_picture_labels": list(LALACHAN_REFERENCE_LABELS),
+            "world_travel_scene_reference_per_shot": 1,
             "sequential_only": True,
+            "capabilities": {
+                "world_travel": {
+                    "template": "world_travel",
+                    "render_mode": "r2v",
+                    "maximum_quality_profile": "quality_bf16_dual",
+                    "picture_slots": {
+                        "shared": [
+                            {"slot": index, "label": label}
+                            for index, label in enumerate(
+                                LALACHAN_REFERENCE_LABELS, start=1
+                            )
+                        ],
+                        "scene": {
+                            "slot": 8,
+                            "kind": "image",
+                            "scope": "shot",
+                            "required": True,
+                        },
+                        "continuity_final_frame": {
+                            "slot": 9,
+                            "kind": "image",
+                            "scope": "successor_shot",
+                            "when_continuity_enabled": True,
+                            "sha256_required": True,
+                        },
+                    },
+                    "continuity_tail": {
+                        "kind": "video",
+                        "placement": "after_shared_videos",
+                        "maximum_slot": 3,
+                        "sha256_required": True,
+                    },
+                    "continuity_recovery_requires": [
+                        "video_path",
+                        "video_sha256",
+                        "image_path",
+                        "image_sha256",
+                    ],
+                }
+            },
         }
         return web.json_response(data)
 

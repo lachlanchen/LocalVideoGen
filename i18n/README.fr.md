@@ -26,16 +26,20 @@ Le thème clair réunit lisiblement la préparation des références, les régla
 
 ## Créer une série vidéo
 
-H3 Studio permet de passer de **Single Clip** à **Series** sans changer d'espace de travail. Le mode série propose le modèle guidé **LALACHAN Series**, avec sept emplacements nommés pour personnages et accessoires, ainsi que le modèle neutre **My Movie** pour toute distribution ou direction visuelle.
+H3 Studio permet de passer de **Single Clip** à **Series** sans changer d'espace de travail. Le mode série propose **LALACHAN Series**, le préréglage **World Travel** qui privilégie la qualité et le préréglage neutre **My Movie** pour toute distribution ou direction visuelle.
 
-![Tableau de réalisation de séries vidéo dans le thème clair de H3 Studio](../docs/images/h3-studio-series-light.png)
+![Tableau de réalisation World Travel dans le thème clair de H3 Studio](../docs/images/h3-studio-world-travel-light.png)
 
 - Importez une seule fois les références communes de personnages, univers, voix et mouvement, puis organisez de 2 à 12 cartes de plan modifiables avec leur propre prompt, durée et graine.
+- **World Travel** verrouille les sept images canoniques de personnages et d'accessoires sur P1–P7, attribue à chaque plan sa propre planche de destination sur P8 et réserve P9 à l'image finale exacte du plan accepté précédent. Les épisodes antérieurs ne peuvent guider que l'identité ou la voix ; ils ne doivent orienter ni le nouveau pays, ni l'intrigue, ni la mise en scène, ni la palette, ni la composition.
 - Une porte d'admission unique maintient tous les rendus H3 strictement séquentiels. Lorsque la continuité est activée, chaque plan non final validé fournit au suivant son image finale exacte et une fin configurée de 2 à 4 secondes (3 secondes par défaut).
 - Mettez en pause après le plan courant, reprenez après un redémarrage, régénérez un plan et sa suite, ou relancez le post-traitement et l'assemblage final sans dépenser de GPU pour un MP4 déjà valide.
 - Chaque tentative est conservée. Le film final n'est assemblé par copie de flux sans perte qu'après contrôle du nombre d'images attendu, de la moyenne déclarée de 24 fps, de l'alignement audio stéréo dans la tolérance AAC, du décodage intégral et du SHA-256 ; un manifeste de validation est également gardé.
+- Les autres projets locaux et sessions Codex peuvent utiliser le client Series sans dépendance, fondé uniquement sur la Python stdlib. Il importe des références de taille bornée, vérifie les capacités du serveur, écrit atomiquement un reçu avec l'identifiant durable avant la génération, résiste aux pauses de validation et aux interruptions du polling, puis vérifie la taille et le SHA-256 d'un artefact avant d'installer le téléchargement.
 
 Le parcours reprend la clarté du storyboard de Xiaoyunque, mais la génération et l'état du projet restent entièrement sur cette station via loopback. Aucun appel n'est envoyé à Xiaoyunque ni à un service cloud payant.
+
+Consultez le [guide du workflow de série](../docs/series-workflow.md) pour la continuité et la reprise, le [guide de la Series API interprojets](../docs/local-series-api.md) pour le client/CLI stdlib et le contrat HTTP complet, ainsi que l'[étude des options pour des vidéos longues fluides](../docs/smooth-long-video-options.md) pour la base H3 native de confiance, les projets expérimentaux de continuité, l'interpolation facultative et les contrôles qualité.
 
 ## Fonctionnalités
 

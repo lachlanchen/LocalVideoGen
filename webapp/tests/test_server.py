@@ -13,7 +13,9 @@ from PIL import Image
 
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
-from webapp.server import MISSING_JOB_GRACE_MS, SERIES_KEY, create_app
+from webapp.series_runner import LALACHAN_REFERENCE_LABELS
+from webapp.server import ASSETS_KEY, MISSING_JOB_GRACE_MS, SERIES_KEY, create_app
+from webapp.workflows import UploadedAsset
 
 
 class FakeProxyContent:
@@ -143,10 +145,84 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/api/config")
         self.assertEqual(response.status, 200)
         config = await response.json()
+        self.assertEqual(config["series_api_version"], 1)
         self.assertEqual(
             config["series"]["lalachan_picture_labels"][:2],
             ["Words card", "Zhuangzi Robot"],
         )
+        self.assertIn("world_travel", config["series"]["templates"])
+        self.assertEqual(
+            config["series"]["world_travel_scene_reference_per_shot"], 1
+        )
+        capability = config["series"]["capabilities"]["world_travel"]
+        self.assertEqual(capability["template"], "world_travel")
+        self.assertEqual(capability["render_mode"], "r2v")
+        self.assertEqual(
+            capability["maximum_quality_profile"], "quality_bf16_dual"
+        )
+        picture_slots = capability["picture_slots"]
+        self.assertEqual(
+            picture_slots["shared"],
+            [
+                {"slot": index, "label": label}
+                for index, label in enumerate(
+                    LALACHAN_REFERENCE_LABELS, start=1
+                )
+            ],
+        )
+        self.assertEqual(picture_slots["scene"]["slot"], 8)
+        self.assertTrue(picture_slots["scene"]["required"])
+        self.assertEqual(picture_slots["continuity_final_frame"]["slot"], 9)
+        self.assertTrue(
+            picture_slots["continuity_final_frame"]["sha256_required"]
+        )
+        self.assertEqual(capability["continuity_tail"]["maximum_slot"], 3)
+        self.assertTrue(capability["continuity_tail"]["sha256_required"])
+        self.assertEqual(
+            capability["continuity_recovery_requires"],
+            ["video_path", "video_sha256", "image_path", "image_sha256"],
+        )
+        quality_profile = next(
+            profile
+            for profile in config["profiles"]
+            if profile["id"] == capability["maximum_quality_profile"]
+        )
+        self.assertEqual(quality_profile["precision"], "bf16")
+        self.assertTrue(quality_profile["dual_gpu"])
+        self.assertFalse(quality_profile["turbo"])
+        self.assertEqual(quality_profile["steps_ref"], 25)
+        uploads = config["uploads"]
+        self.assertEqual(uploads["multipart_field"], "file")
+        self.assertEqual(uploads["kinds"], ["image", "video", "audio"])
+        self.assertEqual(uploads["normalized_max_bytes"], 99 * 1024 * 1024)
+        self.assertEqual(
+            uploads["image"]["extensions"],
+            [".bmp", ".jpeg", ".jpg", ".png", ".webp"],
+        )
+        self.assertEqual(uploads["image"]["source_max_bytes"], 30 * 1024 * 1024)
+        self.assertEqual(uploads["image"]["source_max_edge"], 8192)
+        self.assertEqual(uploads["image"]["source_max_pixels"], 40_000_000)
+        self.assertTrue(uploads["image"]["single_frame"])
+        self.assertEqual(uploads["image"]["normalized"]["format"], "PNG")
+        self.assertEqual(uploads["video"]["source_max_bytes"], 600 * 1024 * 1024)
+        self.assertEqual(
+            uploads["video"]["duration_seconds"], {"min": 2.0, "max": 15.0}
+        )
+        self.assertEqual(uploads["video"]["source_fps"], {"min": 1.0, "max": 240.0})
+        self.assertEqual(uploads["video"]["source_audio_sample_rate_max"], 384_000)
+        self.assertEqual(uploads["video"]["source_audio_channels_max"], 32)
+        self.assertEqual(uploads["video"]["source_streams_max"], 32)
+        self.assertEqual(uploads["video"]["normalized"]["max_edge"], 2048)
+        self.assertEqual(uploads["video"]["normalized"]["fps"], 24)
+        self.assertEqual(uploads["video"]["normalized"]["audio_codec"], "AAC")
+        self.assertEqual(uploads["audio"]["source_max_bytes"], 100 * 1024 * 1024)
+        self.assertEqual(
+            uploads["audio"]["duration_seconds"], {"min": 0.1, "max": 15.0}
+        )
+        self.assertEqual(uploads["audio"]["source_sample_rate_max"], 384_000)
+        self.assertEqual(uploads["audio"]["source_channels_max"], 32)
+        self.assertEqual(uploads["audio"]["normalized"]["codec"], "pcm_s16le")
+        self.assertEqual(uploads["audio"]["normalized"]["sample_rate"], 32_000)
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
@@ -201,7 +277,10 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertIn(f'id="{element_id}"', html)
         self.assertIn("LALACHAN Series", html)
+        self.assertIn("World Travel", html)
         self.assertIn("My Movie", html)
+        self.assertIn('name="seriesTemplate" value="world_travel"', html)
+        self.assertIn('id="worldTravelIdentityGuard"', html)
         self.assertIn("Only one heavy render runs at a time.", html)
 
         app_script = await self.client.get("/static/app.js")
@@ -210,6 +289,9 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('api("/api/series"', script)
         self.assertIn('api("/api/uploads/validate"', script)
         self.assertIn("brief: elements.seriesBrief.value.trim()", script)
+        self.assertIn('scene_reference: {', script)
+        self.assertIn('template === "world_travel"', script)
+        self.assertIn("previous shot's exact final frame", script)
         self.assertIn("/retry-finalization", script)
         self.assertIn("/start`, { method: \"POST\"", script)
 
@@ -340,6 +422,99 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         resumed = await self.client.post(f"/api/series/{series['id']}/resume", json={})
         self.assertEqual(resumed.status, 202)
         self.assertEqual((await resumed.json())["status"], "queued")
+
+    async def test_world_travel_create_and_put_resolve_private_per_shot_scenes(
+        self,
+    ) -> None:
+        registry = self.client.app[ASSETS_KEY]
+
+        def image_handle(name: str, index: int) -> str:
+            record = registry.register(
+                UploadedAsset(
+                    "image",
+                    f"h3-webapp/image/private-{index}.png",
+                    f"{name.lower().replace(' ', '-')}.png",
+                    {"sha256": f"{index:064x}"},
+                ),
+                100,
+            )
+            return record.token
+
+        shared = [
+            {
+                "token": image_handle(label, index),
+                "label": label,
+            }
+            for index, label in enumerate(LALACHAN_REFERENCE_LABELS, start=1)
+        ]
+        rome = image_handle("Rome scene", 8)
+        venice = image_handle("Venice scene", 9)
+        payload = {
+            "title": "Italy route",
+            "brief": "One continuous journey through Italy.",
+            "template": "world_travel",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1024,
+                "height": 768,
+                "continuity_seconds": 3,
+            },
+            "references": {"images": shared, "videos": [], "audio": []},
+            "shots": [
+                {
+                    "title": "Rome",
+                    "prompt": "Meet history at <Picture 8>.",
+                    "duration": 5,
+                    "seed": 1,
+                    "scene_reference": {
+                        "token": rome,
+                        "label": "Rome · Colosseum",
+                    },
+                },
+                {
+                    "title": "Venice",
+                    "prompt": "Arrive naturally at <Picture 8>.",
+                    "duration": 5,
+                    "seed": 2,
+                    "scene_reference": {
+                        "token": venice,
+                        "label": "Venice · Grand Canal",
+                    },
+                },
+            ],
+        }
+        created = await self.client.post("/api/series", json=payload)
+        self.assertEqual(created.status, 201, await created.text())
+        body = await created.json()
+        self.assertEqual(body["template"], "world_travel")
+        self.assertEqual(
+            body["shots"][0]["scene_reference"],
+            {
+                "kind": "image",
+                "name": "rome-scene.png",
+                "label": "Rome · Colosseum",
+            },
+        )
+        for secret in (rome, venice, "h3-webapp/image", "sha256"):
+            self.assertNotIn(secret, str(body))
+
+        payload["shots"][1]["scene_reference"]["label"] = "Venice · Rialto approach"
+        updated = await self.client.put(f"/api/series/{body['id']}", json=payload)
+        self.assertEqual(updated.status, 200, await updated.text())
+        updated_body = await updated.json()
+        self.assertEqual(
+            updated_body["shots"][1]["scene_reference"]["label"],
+            "Venice · Rialto approach",
+        )
+        private = self.client.app[SERIES_KEY].get(body["id"])["document"]
+        self.assertEqual(
+            private["shots"][1]["scene_reference"]["path"],
+            "h3-webapp/image/private-9.png",
+        )
+        self.assertRegex(
+            private["shots"][1]["scene_reference"]["sha256"],
+            r"^[0-9a-f]{64}$",
+        )
 
     async def test_invalid_token_shape_and_dual_gpu_gate(self) -> None:
         response = await self.client.post(

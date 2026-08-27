@@ -14,6 +14,7 @@ output.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -630,6 +631,16 @@ def _check_output(path: Path, limits: MediaLimits) -> int:
     return size
 
 
+def _sha256(path: Path, chunk_size: int = MIB) -> str:
+    """Fingerprint normalized bytes before their temporary workspace is removed."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 async def _normalize_video(
     source: Path,
     destination: Path,
@@ -818,7 +829,12 @@ async def prepare_upload(
                 filename=f"{uuid.uuid4().hex}.png",
                 content_type="image/png",
                 size=size,
-                metadata={**common_metadata, **media_metadata, "size": size},
+                metadata={
+                    **common_metadata,
+                    **media_metadata,
+                    "size": size,
+                    "sha256": await asyncio.to_thread(_sha256, destination),
+                },
                 _workspace=workspace,
             )
 
@@ -851,6 +867,7 @@ async def prepare_upload(
                 "source_width": source_info["width"],
                 "source_height": source_info["height"],
                 "source_fps": source_info["fps"],
+                "sha256": await asyncio.to_thread(_sha256, destination),
             }
             return PreparedUpload(
                 kind="video",
@@ -881,6 +898,7 @@ async def prepare_upload(
             "source_duration": source_info["duration"],
             "source_sample_rate": source_info["sample_rate"],
             "source_channels": source_info["channels"],
+            "sha256": await asyncio.to_thread(_sha256, destination),
         }
         return PreparedUpload(
             kind="audio",

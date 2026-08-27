@@ -5,9 +5,10 @@ Series mode turns a storyboard into a validated local movie while keeping MiniMa
 ## Choose a template
 
 - **LALACHAN Series** requires seven stable picture references. It starts with three editable episode-ready shot prompts and continuity guidance for natural Chinese dialogue, character identity, props, and screen direction.
+- **World Travel** uses those same seven identity anchors, requires one destination plate on every shot, and keeps prior episodes limited to identity or voice guidance. It is the quality-first preset for coherent country episodes rather than unrelated attraction clips.
 - **My Movie** starts with four optional neutral reference slots and generic opening, development, and ending shots. It works for fiction, documentaries, adverts, product films, and other casts.
 
-The LALACHAN picture order remains fixed in every shot:
+The LALACHAN and World Travel picture order remains fixed in every shot:
 
 | Prompt tag | Reference |
 | --- | --- |
@@ -19,7 +20,9 @@ The LALACHAN picture order remains fixed in every shot:
 | `<Picture 6>` | Aya Chan |
 | `<Picture 7>` | Sasa Kun — a human-faced boy in a panda hoodie |
 
-One additional picture slot is reserved for the preceding shot's exact final frame. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
+For World Travel, the current shot's required destination plate is `<Picture 8>` and the preceding accepted shot's exact final frame is `<Picture 9>`. The destination plate controls only that shot's architecture, terrain, light, atmosphere, and geography; it does not carry the previous country's story direction forward. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
+
+LALACHAN Series does not require a per-shot destination plate, so its optional exact final-frame handoff uses the next free picture slot after the seven shared anchors. The UI and API capability response expose the effective tags before submission; callers should not hard-code World Travel's P8/P9 layout for another template.
 
 ## Direct the storyboard
 
@@ -44,7 +47,7 @@ flowchart LR
 
 Only one render may pass the shared submission gate. The next shot is not submitted until the previous MP4 has the expected canvas and exact frame count, a reported average frame rate within 0.01 fps of 24, timeline-aligned 32 kHz stereo audio within AAC tolerances, a successful full decode, and a recorded SHA-256 digest.
 
-When continuity is enabled, H3 Studio retains an accurately trimmed 2-, 3-, or 4-second continuity video and exact final frame for each non-final shot, uploads those derived files to the same local ComfyUI input area, and appends deterministic continuity instructions to the next authored prompt. Three seconds is the default. The final shot does not create an unused handoff.
+When continuity is enabled, H3 Studio retains an accurately trimmed 2-, 3-, or 4-second continuity video and exact final frame for each non-final shot, uploads those derived files to the same local ComfyUI input area, and appends deterministic continuity instructions to the next authored prompt. Both derived files carry recorded SHA-256 provenance. After a restart or retry, the successor is allowed to advertise P9 and submit only if both paths and both hashes are present and valid; otherwise it fails before claiming a GPU job and preserves the prior render. Three seconds is the default. The final shot does not create an unused handoff.
 
 ## Pause, recover, and retry
 
@@ -65,6 +68,7 @@ Upload and artifact API records expose opaque handles and allowlisted URLs, neve
 
 | Action | Endpoint |
 | --- | --- |
+| Discover the versioned Series/World Travel capability contract | `GET /api/config` |
 | Create a durable storyboard | `POST /api/series` |
 | List compact saved projects | `GET /api/series` |
 | Read or replace a ready project | `GET/PUT /api/series/{id}` |
@@ -74,4 +78,4 @@ Upload and artifact API records expose opaque handles and allowlisted URLs, neve
 | Retry final assembly only | `POST /api/series/{id}/retry-finalization` |
 | Stream an allowlisted artifact | `GET /api/series/{id}/artifacts/{artifact_id}` |
 
-The web interface is the supported way to build projects; the API exists so the local UI can remain durable, inspectable, and testable.
+Use the web interface for visual direction, or the supported [cross-project Series API client](local-series-api.md) for durable automation from Python, shell, another project, or another local Codex session. Both enter the same validation, resource, continuity, and artifact-preservation pipeline.

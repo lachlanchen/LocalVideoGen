@@ -148,6 +148,7 @@ class ImagePreparationTests(unittest.IsolatedAsyncioTestCase):
                 (prepared.metadata["width"], prepared.metadata["height"]), (64, 32)
             )
             self.assertEqual(prepared.metadata["original_name"], "portrait.txt")
+            self.assertRegex(prepared.metadata["sha256"], r"^[0-9a-f]{64}$")
             with prepared.open() as handle:
                 self.assertTrue(handle.seekable())
                 self.assertEqual(handle.tell(), 0)

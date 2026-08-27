@@ -26,18 +26,20 @@ The light theme keeps reference setup, quality controls, and render status reada
 
 ## Build a video series
 
-Switch between **Single Clip** and **Series** without leaving H3 Studio. Series mode offers a guided **LALACHAN Series** preset with seven named character/prop slots, plus a neutral **My Movie** preset for any cast or visual style.
+Switch between **Single Clip** and **Series** without leaving H3 Studio. Series mode offers **LALACHAN Series**, a quality-first **World Travel** preset, and a neutral **My Movie** preset for any cast or visual style.
 
-![H3 Studio light-theme video-series director board](docs/images/h3-studio-series-light.png)
+![H3 Studio light-theme World Travel series director board](docs/images/h3-studio-world-travel-light.png)
 
 - Upload shared cast, world, voice, and motion references once, then arrange 2–12 editable shot cards with individual prompts, durations, and seeds.
+- World Travel locks the seven canonical character/prop pictures at P1–P7, gives every shot its own destination plate at P8, and reserves P9 for the preceding accepted shot's exact final frame. Earlier episodes may guide identity or voice only; they cannot steer the new country, plot, blocking, palette, or composition.
 - A single admission gate keeps every H3 render strictly sequential. When continuity is enabled, each validated non-final shot supplies its exact final frame and configured 2–4-second tail (3 seconds by default) to the next shot.
 - Pause after the current shot, resume after a restart, retry one shot or everything that follows, and retry post-processing or final stitching without spending GPU time on an already valid MP4.
 - Every render attempt remains preserved. The final movie is assembled by lossless stream copy only after checks for the expected frame count, reported average 24 fps, stereo-audio alignment within AAC tolerance, full decode, and SHA-256; a validation manifest is retained beside it.
+- Other local projects and Codex sessions can use the dependency-free Series client. It uploads bounded references, verifies server capabilities, writes an atomic durable-ID receipt before generation, survives paused review and polling interruptions, and verifies artifact size plus SHA-256 before installing a download.
 
 The workflow is inspired by the clarity of Xiaoyunque's storyboard experience, but all generation and project state stay on this workstation over loopback. It does not call Xiaoyunque or any paid cloud generation service.
 
-See the [Series workflow guide](docs/series-workflow.md) for the fixed LALACHAN tag order, continuity lifecycle, recovery behavior, artifact validation, and local API outline.
+See the [Series workflow guide](docs/series-workflow.md) for continuity and recovery behavior, the [cross-project Series API guide](docs/local-series-api.md) for the stdlib CLI/client and full HTTP contract, and the [smooth long-video options review](docs/smooth-long-video-options.md) for the trusted native H3 baseline, experimental continuity projects, optional interpolation, and quality gates.
 
 ## What it delivers
 

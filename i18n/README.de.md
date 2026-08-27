@@ -26,16 +26,20 @@ Das helle Design zeigt Referenzeinrichtung, Qualitätsregler und Renderstatus ü
 
 ## Eine Videoserie erstellen
 
-In H3 Studio lässt sich direkt zwischen **Single Clip** und **Series** wechseln. Der Serienmodus bietet die geführte Vorlage **LALACHAN Series** mit sieben benannten Figuren-/Requisitenplätzen sowie **My Movie** als neutrale Vorlage für beliebige Besetzungen und Bildstile.
+In H3 Studio lässt sich direkt zwischen **Single Clip** und **Series** wechseln. Der Serienmodus bietet **LALACHAN Series**, die qualitätsorientierte Vorlage **World Travel** und **My Movie** als neutrale Vorlage für beliebige Besetzungen und Bildstile.
 
-![H3-Studio-Regieansicht für Videoserien im hellen Design](../docs/images/h3-studio-series-light.png)
+![H3-Studio-Regieansicht für World Travel im hellen Design](../docs/images/h3-studio-world-travel-light.png)
 
 - Gemeinsame Figuren-, Welt-, Stimm- und Bewegungsreferenzen werden einmal hochgeladen; anschließend lassen sich 2–12 Shot-Karten mit eigenem Prompt, eigener Dauer und eigenem Seed anordnen.
+- **World Travel** fixiert die sieben kanonischen Figuren- und Requisitenbilder auf P1–P7, weist jedem Shot eine eigene Zielorttafel auf P8 zu und reserviert P9 für das exakte Schlussbild des zuvor akzeptierten Shots. Frühere Episoden dürfen nur Identität oder Stimme vorgeben; sie dürfen weder das neue Land noch Handlung, Blocking, Farbpalette oder Bildkomposition steuern.
 - Eine gemeinsame Zulassungssperre hält alle H3-Renderings strikt sequenziell. Bei aktivierter Kontinuität liefert jeder validierte, nicht letzte Shot sein exaktes Schlussbild und den eingestellten 2–4-Sekunden-Nachlauf (standardmäßig 3 Sekunden) an den nächsten Shot.
 - Nach dem aktuellen Shot pausieren, nach einem Neustart fortsetzen, einen Shot samt Folgeshots wiederholen oder Nachbearbeitung und Endmontage erneut ausführen – ohne GPU-Zeit für bereits gültige MP4-Dateien zu verbrauchen.
 - Jeder Render-Versuch bleibt erhalten. Der fertige Film wird erst nach Prüfung der erwarteten Bildzahl, gemeldeter durchschnittlicher 24 fps, der Stereo-Audio-Ausrichtung innerhalb der AAC-Toleranz, vollständigem Decode und SHA-256 verlustfrei per Stream-Copy zusammengesetzt; ein Prüfmanifest bleibt daneben erhalten.
+- Andere lokale Projekte und Codex-Sitzungen können den ausschließlich auf der Python stdlib basierenden, abhängigkeitsfreien Series-Client verwenden. Er lädt größenbegrenzte Referenzen hoch, prüft die Serverfähigkeiten, schreibt vor der Generierung atomar einen Beleg mit dauerhafter ID, übersteht pausierte Prüfungen und unterbrochenes Polling und verifiziert Größe sowie SHA-256 eines Artefakts, bevor ein Download installiert wird.
 
 Der Ablauf übernimmt die klare Storyboard-Idee von Xiaoyunque, doch Generierung und Projektzustand bleiben per Loopback vollständig auf dieser Workstation. Xiaoyunque oder ein kostenpflichtiger Cloud-Generator wird nicht aufgerufen.
+
+Der [Leitfaden zum Serien-Workflow](../docs/series-workflow.md) beschreibt Kontinuität und Wiederherstellung, der [projektübergreifende Series-API-Leitfaden](../docs/local-series-api.md) den stdlib-CLI/-Client und den vollständigen HTTP-Vertrag und die [Übersicht zu Optionen für flüssige Langvideos](../docs/smooth-long-video-options.md) die vertrauenswürdige native H3-Basis, experimentelle Kontinuitätsprojekte, optionale Interpolation und Qualitätsprüfungen.
 
 ## Leistungsumfang
 

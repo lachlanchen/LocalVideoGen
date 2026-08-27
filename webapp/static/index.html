@@ -63,7 +63,7 @@
           <button class="workflow-option" id="seriesWorkflowTab" type="button" aria-pressed="false" aria-controls="seriesComposer seriesOutputWorkspace">
             <span aria-hidden="true">∞</span>
             <strong>Video series</strong>
-            <small>LALACHAN or your movie</small>
+            <small>LALACHAN, travel, or your movie</small>
           </button>
         </nav>
 
@@ -243,6 +243,12 @@
                 <small>Seven familiar reference slots and continuity-ready shot prompts.</small>
               </label>
               <label class="preset-card">
+                <input type="radio" name="seriesTemplate" value="world_travel">
+                <span class="preset-art world-travel-art" aria-hidden="true"><i></i><i></i></span>
+                <strong>World Travel</strong>
+                <small>P1–P7 identity, a shot-only P8 place plate, and stable P9 continuity.</small>
+              </label>
+              <label class="preset-card">
                 <input type="radio" name="seriesTemplate" value="movie">
                 <span class="preset-art movie-art" aria-hidden="true"><i></i></span>
                 <strong>My Movie</strong>
@@ -271,15 +277,19 @@
               <div>
                 <p class="eyebrow">Step 2</p>
                 <h2 id="seriesCastTitle">Shared cast &amp; world</h2>
-                <p>Upload once. Every shot receives the shared references, and each shot card shows its exact prompt tags.</p>
+                <p id="seriesCastDescription">Upload once. Every shot receives the shared references, and each shot card shows its exact prompt tags.</p>
               </div>
               <span class="asset-counter" id="seriesAssetCount">0 ready</span>
             </div>
             <div class="canonical-reference-grid" id="canonicalReferenceGrid" aria-live="polite"></div>
+            <aside class="world-travel-identity-guard" id="worldTravelIdentityGuard" hidden>
+              <strong>Earlier episodes are identity and voice guides only.</strong>
+              <p>A prior video or audio clip may preserve character appearance and voice timbre. It must never steer this trip's country, plot, story direction, actions, blocking, landmarks, palette, or camera composition.</p>
+            </aside>
             <details class="more-references">
-              <summary>Add movement, voice, music, or extra pictures</summary>
+              <summary id="seriesMoreReferencesSummary">Add movement, voice, music, or extra pictures</summary>
               <div class="reference-upload-grid series-reference-uploads">
-                <label class="compact-drop">
+                <label class="compact-drop" id="seriesExtraImagesDrop">
                   <input id="seriesExtraImages" type="file" multiple accept="image/png,image/jpeg,image/webp,image/bmp" data-series-kind="image">
                   <span aria-hidden="true">＋</span><strong>Extra pictures</strong><small>Up to 8 shared · one slot stays free for continuity</small>
                 </label>

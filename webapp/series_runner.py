@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import logging
 import mimetypes
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .comfy_client import ComfyClient, ComfyError, flatten_outputs
@@ -44,6 +45,7 @@ LALACHAN_REFERENCE_LABELS = (
 )
 LOGGER = logging.getLogger("h3-webapp.series")
 REFERENCE_TAG_PATTERN = re.compile(r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE)
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def _text(value: Any, label: str, *, maximum: int, optional: bool = False) -> str:
@@ -90,16 +92,78 @@ def _trusted_asset(asset: UploadedAsset, *, label: Any) -> dict[str, Any]:
         record["has_audio"] = bool(
             isinstance(asset.metadata, Mapping) and asset.metadata.get("has_audio")
         )
+    if isinstance(asset.metadata, Mapping):
+        digest = str(asset.metadata.get("sha256") or "").lower()
+        if SHA256_PATTERN.fullmatch(digest):
+            record["sha256"] = digest
     return record
+
+
+def _continuity_for_successor(
+    document: Mapping[str, Any], shot_index: int
+) -> dict[str, str] | None:
+    """Validate a recovered P9/final-tail pair before it enters a prompt graph."""
+
+    settings = document.get("settings")
+    continuity_seconds = (
+        settings.get("continuity_seconds") if isinstance(settings, Mapping) else 0
+    )
+    if shot_index <= 0 or not continuity_seconds:
+        return None
+    shots = document.get("shots")
+    prior = (
+        shots[shot_index - 1]
+        if (
+            isinstance(shots, Sequence)
+            and not isinstance(shots, (str, bytes))
+            and shot_index < len(shots)
+        )
+        else None
+    )
+    continuity = prior.get("continuity_input") if isinstance(prior, Mapping) else None
+    if not isinstance(continuity, Mapping):
+        raise SeriesMediaError(
+            "previous shot continuity handoff is incomplete or unverified; "
+            "retry the previous shot before GPU submission"
+        )
+
+    validated: dict[str, str] = {}
+    for kind in ("video", "image"):
+        path_value = continuity.get(f"{kind}_path")
+        name_value = continuity.get(f"{kind}_name")
+        digest = str(continuity.get(f"{kind}_sha256") or "").lower()
+        path = PurePosixPath(path_value) if isinstance(path_value, str) else None
+        if (
+            path is None
+            or path.is_absolute()
+            or not path.parts
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or "\\" in path_value
+            or not isinstance(name_value, str)
+            or not name_value.strip()
+            or len(name_value) > 160
+            or not SHA256_PATTERN.fullmatch(digest)
+        ):
+            raise SeriesMediaError(
+                "previous shot continuity handoff is incomplete or unverified; "
+                "retry the previous shot before GPU submission"
+            )
+        validated[f"{kind}_path"] = str(path)
+        validated[f"{kind}_name"] = name_value.strip()
+        validated[f"{kind}_sha256"] = digest
+    return validated
 
 
 def _series_reference_labels(
     references: Mapping[str, Any],
     *,
+    scene_reference: Mapping[str, Any] | None = None,
     continuity_seconds: int,
     include_continuity: bool,
 ) -> list[str]:
     image_labels = [str(item["label"]) for item in references["images"]]
+    if scene_reference is not None:
+        image_labels.append(str(scene_reference["label"]))
     video_labels: list[tuple[str, str | None]] = []
     for item in references["videos"]:
         soundtrack = item.get("soundtrack")
@@ -145,6 +209,19 @@ def _compose_series_prompt(
             "scale, voice and relationships exact across shots. Use natural Chinese dialogue and clear "
             "screen direction; do not add, merge, duplicate or replace cast members."
         )
+    elif document["template"] == "world_travel":
+        guidance = (
+            "LALACHAN World Travel continuity: lock every named character's identity, species, human "
+            "face, body scale, wardrobe, accessories, relationships and voice across the whole journey. "
+            "Keep the stated travel route, geography, screen direction, time progression and carried "
+            "props coherent. Pictures 1-7 are shared identity and series-style anchors only. Picture 8 "
+            "is the location, architecture, terrain, light and atmosphere anchor for this shot only; "
+            "do not carry its place-specific details into another destination. Any earlier-episode, "
+            "video or audio reference may guide character appearance or voice timbre only: never copy "
+            "its country, plot, story direction, actions, blocking, landmarks or visual composition. "
+            "Use natural concise dialogue and let one motivated journey connect the history and sights "
+            "instead of presenting an unrelated tourist checklist."
+        )
     else:
         guidance = (
             "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, "
@@ -180,8 +257,8 @@ def build_series_document(
     title = _text(payload.get("title"), "title", maximum=120)
     brief = _text(payload.get("brief"), "brief", maximum=2_000, optional=True)
     template = str(payload.get("template") or "lalachan")
-    if template not in {"lalachan", "movie"}:
-        raise RequestError("template must be lalachan or movie")
+    if template not in {"lalachan", "movie", "world_travel"}:
+        raise RequestError("template must be lalachan, movie, or world_travel")
     settings_raw = payload.get("settings") or {}
     if not isinstance(settings_raw, Mapping):
         raise RequestError("settings must be a JSON object")
@@ -237,11 +314,21 @@ def build_series_document(
         "videos": reference_list("videos", "video", 2),
         "audio": reference_list("audio", "audio", 3),
     }
-    if template == "lalachan":
+    if template in {"lalachan", "world_travel"}:
         image_labels = tuple(item["label"] for item in references["images"])
-        if len(image_labels) not in {7, 8} or image_labels[:7] != LALACHAN_REFERENCE_LABELS:
+        valid_count = (
+            len(image_labels) == 7
+            if template == "world_travel"
+            else len(image_labels) in {7, 8}
+        )
+        if not valid_count or image_labels[:7] != LALACHAN_REFERENCE_LABELS:
+            count_note = (
+                "exactly seven pictures"
+                if template == "world_travel"
+                else "its first seven pictures"
+            )
             raise RequestError(
-                "lalachan requires its first seven pictures in this exact order: "
+                f"{template} requires {count_note} in this exact order: "
                 + ", ".join(LALACHAN_REFERENCE_LABELS)
             )
 
@@ -257,6 +344,21 @@ def build_series_document(
             raise RequestError("each shot must be a JSON object")
         shot_title = _text(item.get("title") or f"Shot {index + 1}", "shot title", maximum=120)
         prompt = _text(item.get("prompt"), "shot prompt", maximum=10_000)
+        scene_reference: dict[str, Any] | None = None
+        scene_raw = item.get("scene_reference")
+        if template == "world_travel":
+            if not isinstance(scene_raw, Mapping):
+                raise RequestError(
+                    f"Shot {index + 1} scene_reference must be an image upload object"
+                )
+            scene_asset = resolve_asset(scene_raw.get("token"), "image", False)
+            assert scene_asset is not None
+            scene_reference = _trusted_asset(
+                scene_asset,
+                label=scene_raw.get("label") or f"{shot_title} location",
+            )
+        elif scene_raw is not None:
+            raise RequestError("scene_reference is only available for world_travel")
         try:
             duration = float(item.get("duration", 10))
         except (TypeError, ValueError, OverflowError) as exc:
@@ -284,6 +386,7 @@ def build_series_document(
                 "duration": duration,
                 "actual_duration": aligned_frame_count(duration) / 24.0,
                 "seed": seed,
+                "scene_reference": scene_reference,
                 "status": "pending",
                 "attempts": [],
                 "accepted_attempt": None,
@@ -325,6 +428,7 @@ def build_series_document(
     for index in range(len(shots)):
         labels = _series_reference_labels(
             references,
+            scene_reference=shots[index].get("scene_reference"),
             continuity_seconds=continuity_seconds,
             include_continuity=index > 0,
         )
@@ -428,21 +532,27 @@ def public_series(record: Mapping[str, Any], client: ComfyClient | None = None) 
             for artifact_id in shot.get("continuity_artifacts") or []
             if artifact_id in artifact_index
         ]
-        shots.append(
-            {
-                "index": shot.get("index"),
-                "title": shot.get("title"),
-                "prompt": shot.get("prompt"),
-                "duration": shot.get("duration"),
-                "actual_duration": shot.get("actual_duration"),
-                "seed": shot.get("seed"),
-                "status": shot.get("status"),
-                "attempts": attempts,
-                "accepted_attempt": shot.get("accepted_attempt"),
-                "continuity": continuity,
-                "error": shot.get("error"),
+        public_shot = {
+            "index": shot.get("index"),
+            "title": shot.get("title"),
+            "prompt": shot.get("prompt"),
+            "duration": shot.get("duration"),
+            "actual_duration": shot.get("actual_duration"),
+            "seed": shot.get("seed"),
+            "status": shot.get("status"),
+            "attempts": attempts,
+            "accepted_attempt": shot.get("accepted_attempt"),
+            "continuity": continuity,
+            "error": shot.get("error"),
+        }
+        scene_reference = shot.get("scene_reference")
+        if isinstance(scene_reference, Mapping):
+            public_shot["scene_reference"] = {
+                "kind": scene_reference.get("kind"),
+                "name": scene_reference.get("name"),
+                "label": scene_reference.get("label"),
             }
-        )
+        shots.append(public_shot)
     active_shot = document.get("active_shot")
     progress = None
     if client is not None and isinstance(active_shot, int) and 0 <= active_shot < len(shots):
@@ -540,6 +650,7 @@ class SeriesRunner:
         submission_lock: asyncio.Lock | None = None,
         runtime_check: Callable[[], Awaitable[None]] | None = None,
         submission_check: Callable[[], Awaitable[None]] | None = None,
+        input_root: str | Path | None = None,
     ) -> None:
         self.store = store
         self.jobs = jobs
@@ -549,6 +660,7 @@ class SeriesRunner:
         self.submission_lock = submission_lock or asyncio.Lock()
         self.runtime_check = runtime_check
         self.submission_check = submission_check or runtime_check
+        self.input_root = Path(input_root).resolve() if input_root is not None else None
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -795,6 +907,13 @@ class SeriesRunner:
         images = [
             UploadedAsset("image", item["path"], item["name"]) for item in refs["images"]
         ]
+        scene_reference = document["shots"][shot_index].get("scene_reference")
+        if isinstance(scene_reference, Mapping):
+            images.append(
+                UploadedAsset(
+                    "image", scene_reference["path"], scene_reference["name"]
+                )
+            )
         videos = [
             UploadedAsset("video", item["path"], item["name"]) for item in refs["videos"]
         ]
@@ -807,17 +926,13 @@ class SeriesRunner:
         audio = [
             UploadedAsset("audio", item["path"], item["name"]) for item in refs["audio"]
         ]
-        if shot_index > 0 and document["settings"]["continuity_seconds"]:
-            prior = document["shots"][shot_index - 1]
-            continuity = prior.get("continuity_input")
-            if not isinstance(continuity, Mapping) or not continuity.get("video_path"):
-                raise SeriesMediaError("previous shot continuity handoff is not ready")
-            if continuity.get("image_path"):
-                images.append(
-                    UploadedAsset(
-                        "image", continuity["image_path"], continuity["image_name"]
-                    )
+        continuity = _continuity_for_successor(document, shot_index)
+        if continuity is not None:
+            images.append(
+                UploadedAsset(
+                    "image", continuity["image_path"], continuity["image_name"]
                 )
+            )
             videos.append(
                 UploadedAsset(
                     "video", continuity["video_path"], continuity["video_name"]
@@ -826,8 +941,9 @@ class SeriesRunner:
             video_audio.append(None)
         labels = _series_reference_labels(
             refs,
+            scene_reference=(scene_reference if isinstance(scene_reference, Mapping) else None),
             continuity_seconds=int(document["settings"]["continuity_seconds"]),
-            include_continuity=shot_index > 0,
+            include_continuity=continuity is not None,
         )
         assets = {
             "first_frame": None,
@@ -839,6 +955,99 @@ class SeriesRunner:
         }
         mode = "r2v" if any((images, videos, audio)) else "t2v"
         return assets, mode, labels
+
+    @staticmethod
+    def _reference_records_for_shot(
+        document: Mapping[str, Any], shot_index: int
+    ) -> list[dict[str, str]]:
+        """Return private reference provenance in exact per-shot media order."""
+
+        refs = document["references"]
+        records: list[dict[str, str]] = []
+
+        def append(
+            item: Mapping[str, Any], *, kind: str, label: str | None = None
+        ) -> None:
+            digest = str(item.get("sha256") or "").lower()
+            if not SHA256_PATTERN.fullmatch(digest):
+                return
+            records.append(
+                {
+                    "kind": kind,
+                    "path": str(item["path"]),
+                    "name": str(item["name"]),
+                    "label": label or str(item["label"]),
+                    "sha256": digest,
+                }
+            )
+
+        for item in refs["images"]:
+            append(item, kind="image")
+        scene = document["shots"][shot_index].get("scene_reference")
+        if isinstance(scene, Mapping):
+            append(scene, kind="image")
+        for item in refs["videos"]:
+            append(item, kind="video")
+            soundtrack = item.get("soundtrack")
+            if isinstance(soundtrack, Mapping):
+                append(soundtrack, kind="audio")
+        for item in refs["audio"]:
+            append(item, kind="audio")
+
+        continuity = _continuity_for_successor(document, shot_index)
+        if continuity is not None:
+            for kind in ("image", "video"):
+                records.append(
+                    {
+                        "kind": kind,
+                        "path": continuity[f"{kind}_path"],
+                        "name": continuity[f"{kind}_name"],
+                        "label": f"previous shot continuity {kind}",
+                        "sha256": continuity[f"{kind}_sha256"],
+                    }
+                )
+        return records
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    async def _verify_reference_integrity(
+        self, document: Mapping[str, Any], shot_index: int
+    ) -> list[dict[str, str]]:
+        """Reject changed normalized inputs before claiming a costly GPU attempt."""
+
+        records = self._reference_records_for_shot(document, shot_index)
+        if self.input_root is None:
+            return records
+        root = self.input_root
+
+        async def verify(record: Mapping[str, str]) -> None:
+            relative = PurePosixPath(record["path"])
+            candidate = root.joinpath(*relative.parts)
+            try:
+                if candidate.is_symlink():
+                    raise OSError("symbolic reference")
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(root)
+                if not resolved.is_file():
+                    raise OSError("not a regular file")
+                actual = await asyncio.to_thread(self._sha256, resolved)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise SeriesMediaError(
+                    f"reference '{record['label']}' is no longer available; upload it again"
+                ) from exc
+            if actual != record["sha256"]:
+                raise SeriesMediaError(
+                    f"reference '{record['label']}' changed after upload; refusing a GPU submission"
+                )
+
+        await asyncio.gather(*(verify(record) for record in records))
+        return records
 
     def _series_prompt(
         self, document: Mapping[str, Any], shot_index: int, labels: Sequence[str]
@@ -857,6 +1066,13 @@ class SeriesRunner:
         expected_revision: int,
     ) -> bool:
         assets, mode, labels = self._references_for_shot(document, shot_index)
+        reference_fingerprints = self._reference_records_for_shot(
+            document, shot_index
+        )
+        fingerprint_manifest = [
+            {key: value for key, value in record.items() if key != "path"}
+            for record in reference_fingerprints
+        ]
         shot = document["shots"][shot_index]
         prompt_text = self._series_prompt(document, shot_index, labels)
         settings = document["settings"]
@@ -898,6 +1114,7 @@ class SeriesRunner:
             "seed": str(spec.seed),
             "ref_image_size": spec.ref_image_size,
             "reference_map": list(labels),
+            "reference_fingerprints": copy.deepcopy(fingerprint_manifest),
         }
 
         def claim(document: dict[str, Any], _: str):
@@ -912,6 +1129,7 @@ class SeriesRunner:
                     "error": None,
                     "artifact_ids": [],
                     "reference_map": list(labels),
+                    "reference_fingerprints": copy.deepcopy(fingerprint_manifest),
                 }
             )
             document["active_shot"] = shot_index
@@ -950,6 +1168,17 @@ class SeriesRunner:
                     series_id, lambda current, _: (current, "waiting")
                 )
                 return True
+            # Recheck normalized bytes while holding the shared admission lock,
+            # immediately before the durable claim and upstream submission.
+            verified = await self._verify_reference_integrity(
+                latest_document, shot_index
+            )
+            verified_manifest = [
+                {key: value for key, value in record.items() if key != "path"}
+                for record in verified
+            ]
+            if verified_manifest != fingerprint_manifest:
+                raise SeriesMediaError("series references changed before GPU submission")
             self.store.mutate(series_id, claim)
             self.jobs.register(job_id, metadata, status="submitting")
             try:
@@ -1093,8 +1322,14 @@ class SeriesRunner:
             continuity_input = {
                 "video_path": str(uploaded["path"]),
                 "video_name": str(tail["download_name"]),
+                "video_sha256": str(
+                    (tail.get("metadata") or {}).get("sha256") or ""
+                ),
                 "image_path": str(uploaded_frame["path"]),
                 "image_name": str(frame["download_name"]),
+                "image_sha256": str(
+                    (frame.get("metadata") or {}).get("sha256") or ""
+                ),
             }
 
         def accepted(document: dict[str, Any], status: str):
