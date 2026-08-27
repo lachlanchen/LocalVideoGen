@@ -24,6 +24,21 @@ The light theme keeps reference setup, quality controls, and render status reada
 
 ![H3 Studio light theme with local MiniMax H3 reference and render controls](docs/images/h3-studio-light.png)
 
+## Build a video series
+
+Switch between **Single Clip** and **Series** without leaving H3 Studio. Series mode offers a guided **LALACHAN Series** preset with seven named character/prop slots, plus a neutral **My Movie** preset for any cast or visual style.
+
+![H3 Studio light-theme video-series director board](docs/images/h3-studio-series-light.png)
+
+- Upload shared cast, world, voice, and motion references once, then arrange 2–12 editable shot cards with individual prompts, durations, and seeds.
+- A single admission gate keeps every H3 render strictly sequential. After each non-final shot passes full video/audio validation, its exact final frame and final three seconds become the next shot's continuity references.
+- Pause after the current shot, resume after a restart, retry one shot or everything that follows, and retry post-processing or final stitching without spending GPU time on an already valid MP4.
+- Every render attempt remains preserved. The final movie is assembled by lossless stream copy only after frame-count, 24 fps, stereo-audio, full-decode, and SHA-256 checks; a validation manifest is retained beside it.
+
+The workflow is inspired by the clarity of Xiaoyunque's storyboard experience, but all generation and project state stay on this workstation over loopback. It does not call Xiaoyunque or any paid cloud generation service.
+
+See the [Series workflow guide](docs/series-workflow.md) for the fixed LALACHAN tag order, continuity lifecycle, recovery behavior, artifact validation, and local API outline.
+
 ## What it delivers
 
 - Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, aligned NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.
@@ -105,7 +120,7 @@ Run static workflow generation/validation and the webapp tests without submittin
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

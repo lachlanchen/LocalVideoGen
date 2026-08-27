@@ -54,6 +54,20 @@
           <span class="model-chip">H3 · native stereo</span>
         </div>
 
+        <nav class="workflow-switch" aria-label="Creation workflow">
+          <button class="workflow-option" id="singleWorkflowTab" type="button" aria-pressed="true" aria-controls="singleComposer singleOutputWorkspace">
+            <span aria-hidden="true">01</span>
+            <strong>Single clip</strong>
+            <small>One finished scene</small>
+          </button>
+          <button class="workflow-option" id="seriesWorkflowTab" type="button" aria-pressed="false" aria-controls="seriesComposer seriesOutputWorkspace">
+            <span aria-hidden="true">∞</span>
+            <strong>Video series</strong>
+            <small>LALACHAN or your movie</small>
+          </button>
+        </nav>
+
+        <div id="singleComposer">
         <form id="renderForm" novalidate>
           <fieldset class="mode-fieldset">
             <legend class="sr-only">Generation mode</legend>
@@ -196,9 +210,129 @@
             <small>BF16 · 25 steps · dual stage</small>
           </button>
         </form>
+        </div>
+
+        <form id="seriesComposer" class="series-composer" hidden novalidate>
+          <div class="series-intro">
+            <p class="eyebrow">Series director</p>
+            <h2>Build once. Let each shot continue the last.</h2>
+            <p>Upload your cast once, arrange the shots, then H3 generates them in order and carries a short continuity tail into the next scene.</p>
+          </div>
+
+          <ol class="series-steps" aria-label="Series setup steps">
+            <li class="active"><span>1</span> Story</li>
+            <li><span>2</span> Cast</li>
+            <li><span>3</span> Shots</li>
+            <li><span>4</span> Review</li>
+          </ol>
+
+          <section class="series-section" aria-labelledby="seriesStoryTitle">
+            <div class="series-section-heading">
+              <div>
+                <p class="eyebrow">Step 1</p>
+                <h2 id="seriesStoryTitle">Choose your starting point</h2>
+              </div>
+              <span class="autosave-note" id="seriesDraftStatus">Draft saves in this browser</span>
+            </div>
+            <fieldset class="preset-grid">
+              <legend class="sr-only">Series template</legend>
+              <label class="preset-card selected">
+                <input type="radio" name="seriesTemplate" value="lalachan" checked>
+                <span class="preset-art lalachan-art" aria-hidden="true"><i></i><i></i><i></i></span>
+                <strong>LALACHAN Series</strong>
+                <small>Seven familiar reference slots and continuity-ready shot prompts.</small>
+              </label>
+              <label class="preset-card">
+                <input type="radio" name="seriesTemplate" value="movie">
+                <span class="preset-art movie-art" aria-hidden="true"><i></i></span>
+                <strong>My Movie</strong>
+                <small>A clean storyboard for any cast, documentary, advert, or film.</small>
+              </label>
+            </fieldset>
+            <div class="series-title-grid">
+              <div class="field-group">
+                <label for="seriesTitle">Project title</label>
+                <input id="seriesTitle" name="seriesTitle" type="text" maxlength="120" value="New LALACHAN episode" required>
+              </div>
+              <div class="field-group">
+                <label for="seriesProfile">Quality</label>
+                <select id="seriesProfile" name="seriesProfile" aria-describedby="seriesProfileHint"></select>
+                <p class="field-hint" id="seriesProfileHint">Applied consistently to every shot.</p>
+              </div>
+              <div class="field-group span-2">
+                <label for="seriesBrief">Story note <span class="optional-label">optional · stays with this draft</span></label>
+                <textarea id="seriesBrief" rows="3" maxlength="2000" placeholder="What should stay emotionally or visually consistent across the whole story?"></textarea>
+              </div>
+            </div>
+          </section>
+
+          <section class="series-section" aria-labelledby="seriesCastTitle">
+            <div class="series-section-heading">
+              <div>
+                <p class="eyebrow">Step 2</p>
+                <h2 id="seriesCastTitle">Shared cast &amp; world</h2>
+                <p>Upload once. Every shot receives the shared references, and each shot card shows its exact prompt tags.</p>
+              </div>
+              <span class="asset-counter" id="seriesAssetCount">0 ready</span>
+            </div>
+            <div class="canonical-reference-grid" id="canonicalReferenceGrid" aria-live="polite"></div>
+            <details class="more-references">
+              <summary>Add movement, voice, music, or extra pictures</summary>
+              <div class="reference-upload-grid series-reference-uploads">
+                <label class="compact-drop">
+                  <input id="seriesExtraImages" type="file" multiple accept="image/png,image/jpeg,image/webp,image/bmp" data-series-kind="image">
+                  <span aria-hidden="true">＋</span><strong>Extra pictures</strong><small>Up to 8 shared · one slot stays free for continuity</small>
+                </label>
+                <label class="compact-drop">
+                  <input id="seriesVideos" type="file" multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska" data-series-kind="video">
+                  <span aria-hidden="true">＋</span><strong>Reference video</strong><small>Up to 2 · one slot stays free for continuity</small>
+                </label>
+                <label class="compact-drop">
+                  <input id="seriesAudio" type="file" multiple accept="audio/*,.flac,.m4a,.opus" data-series-kind="audio">
+                  <span aria-hidden="true">＋</span><strong>Voice &amp; audio</strong><small>Dialogue voice or music</small>
+                </label>
+              </div>
+              <div class="asset-list" id="seriesExtraAssetList"></div>
+            </details>
+          </section>
+
+          <section class="series-section" aria-labelledby="seriesShotsTitle">
+            <div class="series-section-heading">
+              <div>
+                <p class="eyebrow">Step 3</p>
+                <h2 id="seriesShotsTitle">Storyboard</h2>
+                <p>Two to twelve shots. Each one starts only after the previous shot is safely saved.</p>
+              </div>
+              <div class="storyboard-total"><strong id="seriesShotCount">3 shots</strong><span id="seriesDurationTotal">30.38 s actual</span></div>
+            </div>
+            <div class="shot-list" id="seriesShotList"></div>
+            <button class="add-shot-button" id="addSeriesShot" type="button"><span aria-hidden="true">＋</span> Add another shot</button>
+          </section>
+
+          <section class="series-section review-section" aria-labelledby="seriesReviewTitle">
+            <div class="series-section-heading">
+              <div>
+                <p class="eyebrow">Step 4</p>
+                <h2 id="seriesReviewTitle">Review &amp; generate</h2>
+                <p>Preflight checks references, timing, prompts, and the local engine. Your individual attempts are never deleted.</p>
+              </div>
+            </div>
+            <div class="preflight-list" id="seriesPreflight" role="status" aria-live="polite"></div>
+            <div class="series-settings-row">
+              <label><span>Canvas</span><select id="seriesResolution" name="seriesResolution"></select></label>
+              <label><span>Continuity handoff</span><select id="seriesContinuity" name="seriesContinuity"><option value="3">Last 3 seconds</option><option value="2">Last 2 seconds</option><option value="4">Last 4 seconds</option><option value="0">Off</option></select></label>
+              <label><span>Reference fidelity</span><select id="seriesRefImageSize" name="seriesRefImageSize"><option value="max">Maximum identity</option><option value="match">Match canvas · faster</option></select></label>
+            </div>
+            <div class="form-status" id="seriesFormStatus" role="status" aria-live="polite"></div>
+            <button class="primary-button series-start-button" id="startSeries" type="submit" disabled>
+              <span>Save &amp; start new storyboard</span>
+              <small id="seriesStartSummary">3 shots · generated one at a time</small>
+            </button>
+          </section>
+        </form>
       </section>
 
-      <section class="workspace" aria-label="Generation output and history">
+      <section class="workspace" id="singleOutputWorkspace" aria-label="Generation output and history">
         <article class="viewer panel" aria-labelledby="viewerTitle">
           <div class="viewer-heading">
             <div>
@@ -254,6 +388,68 @@
           </div>
           <div class="job-list" id="jobList" aria-live="polite">
             <p class="empty-list">No H3 renders yet.</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="workspace series-output-workspace" id="seriesOutputWorkspace" hidden aria-label="Series review, progress, and output">
+        <article class="series-overview panel" aria-labelledby="seriesOverviewTitle">
+          <div class="viewer-heading">
+            <div>
+              <p class="eyebrow">Director board</p>
+              <h2 id="seriesOverviewTitle">Your series at a glance</h2>
+            </div>
+            <span class="series-status-badge draft" id="seriesStatusBadge">Draft</span>
+          </div>
+          <div class="series-summary-hero" id="seriesSummaryHero">
+            <div class="summary-reel" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div>
+              <strong id="seriesSummaryTitle">New LALACHAN episode</strong>
+              <p id="seriesSummaryText">Add your cast and shape each shot. A live timeline will replace this review when generation starts.</p>
+            </div>
+          </div>
+          <div class="series-record-error" id="seriesRecordError" role="alert" hidden></div>
+          <div class="series-summary-metrics" id="seriesSummaryMetrics"></div>
+          <div class="series-control-row" id="seriesControls" hidden>
+            <button class="secondary-button" id="startSavedSeries" type="button" hidden>Start this saved series</button>
+            <button class="secondary-button" id="pauseSeries" type="button">Pause after this shot</button>
+            <button class="secondary-button" id="resumeSeries" type="button" hidden>Resume series</button>
+            <button class="secondary-button" id="retrySeriesFinalization" type="button" hidden title="Rebuild only the final MP4 and manifest from accepted shots; no shot will regenerate.">Retry stitching — no shots regenerate</button>
+            <button class="text-button danger" id="cancelSeriesActive" type="button">Cancel active shot</button>
+          </div>
+        </article>
+
+        <article class="series-timeline-panel panel" aria-labelledby="seriesTimelineTitle">
+          <div class="section-label compact">
+            <div><p class="eyebrow">Timeline</p><h2 id="seriesTimelineTitle">Shot progress</h2></div>
+            <button class="text-button" id="refreshSeries" type="button">Refresh</button>
+          </div>
+          <ol class="series-timeline" id="seriesTimeline" aria-live="polite">
+            <li class="timeline-empty">Your editable shots will appear here.</li>
+          </ol>
+        </article>
+
+        <article class="series-final panel" id="seriesFinalPanel" hidden aria-labelledby="seriesFinalTitle">
+          <div class="viewer-heading">
+            <div><p class="eyebrow">Final movie</p><h2 id="seriesFinalTitle">Stitched series</h2></div>
+            <a class="secondary-button" id="downloadSeriesFinal" href="#" download>Download full MP4</a>
+          </div>
+          <video id="seriesFinalVideo" controls playsinline preload="metadata"></video>
+          <p class="series-final-note">Every original shot and every attempt remains available in the timeline above.</p>
+        </article>
+
+        <article class="history panel" aria-labelledby="seriesLibraryTitle">
+          <div class="section-label compact">
+            <div><p class="eyebrow">Library</p><h2 id="seriesLibraryTitle">Saved series</h2></div>
+            <button class="text-button" id="refreshSeriesLibrary" type="button">Refresh</button>
+          </div>
+          <div class="series-library" id="seriesLibrary" aria-live="polite"><p class="empty-list">No local series yet.</p></div>
+        </article>
+
+        <article class="system-strip panel" aria-labelledby="seriesSafetyTitle">
+          <div class="continuity-explainer">
+            <span aria-hidden="true">A</span><i></i><span aria-hidden="true">B</span>
+            <div><h2 id="seriesSafetyTitle">Continuity without overlap</h2><p>H3 saves a shot, validates it, then gives the next shot a short visual tail. Only one heavy render runs at a time.</p></div>
           </div>
         </article>
       </section>

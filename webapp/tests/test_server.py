@@ -13,7 +13,7 @@ from PIL import Image
 
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
-from webapp.server import MISSING_JOB_GRACE_MS, create_app
+from webapp.server import MISSING_JOB_GRACE_MS, SERIES_KEY, create_app
 
 
 class FakeProxyContent:
@@ -142,6 +142,11 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def test_config_loopback_and_error_security_headers(self) -> None:
         response = await self.client.get("/api/config")
         self.assertEqual(response.status, 200)
+        config = await response.json()
+        self.assertEqual(
+            config["series"]["lalachan_picture_labels"][:2],
+            ["Words card", "Zhuangzi Robot"],
+        )
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
@@ -178,6 +183,36 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('localStorage.setItem(storageKey, preference)', script)
         self.assertIn('matchMedia("(prefers-color-scheme: dark)")', script)
 
+    async def test_studio_exposes_the_guided_series_workspace(self) -> None:
+        response = await self.client.get("/")
+        self.assertEqual(response.status, 200)
+        html = await response.text()
+        for element_id in (
+            "singleWorkflowTab",
+            "seriesWorkflowTab",
+            "seriesComposer",
+            "canonicalReferenceGrid",
+            "seriesShotList",
+            "seriesPreflight",
+            "seriesTimeline",
+            "seriesLibrary",
+            "startSavedSeries",
+            "retrySeriesFinalization",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("LALACHAN Series", html)
+        self.assertIn("My Movie", html)
+        self.assertIn("Only one heavy render runs at a time.", html)
+
+        app_script = await self.client.get("/static/app.js")
+        self.assertEqual(app_script.status, 200)
+        script = await app_script.text()
+        self.assertIn('api("/api/series"', script)
+        self.assertIn('api("/api/uploads/validate"', script)
+        self.assertIn("brief: elements.seriesBrief.value.trim()", script)
+        self.assertIn("/retry-finalization", script)
+        self.assertIn("/start`, { method: \"POST\"", script)
+
     async def test_non_multipart_upload_is_a_safe_client_error(self) -> None:
         response = await self.client.post(
             "/api/uploads?kind=image",
@@ -201,6 +236,18 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("path", body)
         self.assertTrue(self.comfy.upload_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
 
+        validation = await self.client.post(
+            "/api/uploads/validate",
+            json={
+                "uploads": [
+                    {"token": body["token"], "kind": "image"},
+                    {"token": "expired-handle", "kind": "image"},
+                ]
+            },
+        )
+        self.assertEqual(validation.status, 200, await validation.text())
+        self.assertEqual((await validation.json())["valid"], [body["token"]])
+
     async def test_render_registration_native_graph_and_history(self) -> None:
         payload = {
             "mode": "t2v",
@@ -220,9 +267,79 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(node["class_type"] == "SaveVideo" for node in graph.values()), 1)
         self.assertEqual(self.store.get(body["id"])["metadata"]["prompt"], payload["prompt"])
 
+        overlapping = await self.client.post("/api/renders", json=payload)
+        self.assertEqual(overlapping.status, 409)
+        self.assertIn("Another local H3 render", (await overlapping.json())["error"])
+        self.assertEqual(len(self.comfy.submissions), 1)
+
         history = await self.client.get("/api/jobs?scope=all&limit=24")
         self.assertEqual(history.status, 200)
         self.assertEqual((await history.json())["jobs"][0]["id"], body["id"])
+
+    async def test_series_api_keeps_upload_locations_private_and_waits_for_manual_job(self) -> None:
+        source = io.BytesIO()
+        Image.new("RGB", (37, 23), (10, 20, 30)).save(source, "PNG")
+        form = FormData()
+        form.add_field("file", source.getvalue(), filename="rara.png", content_type="image/png")
+        uploaded = await self.client.post("/api/uploads?kind=image", data=form)
+        token = (await uploaded.json())["token"]
+        payload = {
+            "title": "Forest rescue",
+            "template": "movie",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1024,
+                "height": 768,
+                "ref_image_size": "max",
+                "continuity_seconds": 3,
+                "advance": True,
+            },
+            "references": {
+                "images": [{"token": token, "label": "Rara Xia"}],
+                "videos": [],
+                "audio": [],
+            },
+            "shots": [
+                {"title": "Signal", "prompt": "Find the signal.", "duration": 5, "seed": 1},
+                {"title": "Rescue", "prompt": "Lift the beam.", "duration": 5, "seed": 2},
+            ],
+        }
+        created = await self.client.post("/api/series", json=payload)
+        self.assertEqual(created.status, 201, await created.text())
+        series = await created.json()
+        self.assertEqual(series["references"]["images"][0]["label"], "Rara Xia")
+        self.assertNotIn("token", str(series))
+        self.assertNotIn("h3-webapp/image", str(series))
+        self.assertEqual(series["status"], "ready")
+
+        listed = await self.client.get("/api/series")
+        library_item = (await listed.json())["series"][0]
+        self.assertEqual(library_item["id"], series["id"])
+        self.assertEqual(library_item["shot_count"], 2)
+        for detail_only in ("shots", "references", "artifacts"):
+            self.assertNotIn(detail_only, library_item)
+        detail = await self.client.get(f"/api/series/{series['id']}")
+        self.assertEqual((await detail.json())["title"], "Forest rescue")
+        payload["title"] = "Forest rescue revised"
+        edited = await self.client.put(f"/api/series/{series['id']}", json=payload)
+        self.assertEqual(edited.status, 200, await edited.text())
+        self.assertEqual((await edited.json())["title"], "Forest rescue revised")
+
+        manual_job = str(uuid.uuid4())
+        self.store.register(manual_job, {"mode": "t2v"}, status="pending")
+        started = await self.client.post(f"/api/series/{series['id']}/start", json={})
+        self.assertEqual(started.status, 202, await started.text())
+        await __import__("asyncio").sleep(0.02)
+        durable = self.client.app[SERIES_KEY].get(series["id"])
+        self.assertIn(durable["status"], {"queued", "waiting"})
+        self.assertEqual(self.comfy.submissions, [])
+
+        paused = await self.client.post(f"/api/series/{series['id']}/pause", json={})
+        self.assertEqual(paused.status, 202)
+        self.assertEqual((await paused.json())["status"], "paused")
+        resumed = await self.client.post(f"/api/series/{series['id']}/resume", json={})
+        self.assertEqual(resumed.status, 202)
+        self.assertEqual((await resumed.json())["status"], "queued")
 
     async def test_invalid_token_shape_and_dual_gpu_gate(self) -> None:
         response = await self.client.post(
@@ -258,6 +375,49 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertTrue((await response.json())["already_missing"])
         self.assertEqual(self.store.status(missing_id), "cancelled")
+
+    async def test_cancel_cannot_overwrite_watcher_completion(self) -> None:
+        job_id = str(uuid.uuid4())
+        self.store.register(job_id, {"mode": "t2v"}, status="pending")
+        self.comfy.records[job_id] = {
+            "id": job_id,
+            "status": "pending",
+            "outputs": {},
+        }
+        output = {
+            "id": 0,
+            "filename": "precious.mp4",
+            "subfolder": "video",
+            "type": "output",
+            "media_type": "video",
+            "node_id": "42",
+        }
+
+        async def completed_during_cancel(cancelled_job_id):
+            self.assertEqual(cancelled_job_id, job_id)
+            self.store.update(job_id, "completed", outputs=[output])
+            return {"cancelled": True}
+
+        self.comfy.cancel = completed_during_cancel
+        response = await self.client.post(f"/api/jobs/{job_id}/cancel", json={})
+        self.assertEqual(response.status, 200)
+        self.assertTrue((await response.json())["already_completed"])
+        stored = self.store.get(job_id)
+        self.assertEqual(stored["status"], "completed")
+        self.assertEqual(stored["outputs"], [output])
+
+        # A later stale terminal response cannot hide or empty the completion.
+        self.comfy.records[job_id] = {
+            "id": job_id,
+            "status": "failed",
+            "outputs": {},
+            "execution_error": {"message": "stale failure"},
+        }
+        detail = await self.client.get(f"/api/jobs/{job_id}")
+        body = await detail.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(len(body["outputs"]), 1)
+        self.assertNotIn("error", body)
 
     async def test_stale_active_job_missing_from_reachable_engine_is_closed(self) -> None:
         job_id = str(uuid.uuid4())
@@ -330,6 +490,52 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("script-src 'self'", response.headers["Content-Security-Policy"])
         self.assertEqual(await response.read(), b"<script>should-not-be-html</script>")
+
+    async def test_series_artifact_is_served_only_from_its_durable_allowlist(self) -> None:
+        folder = self.output_root / "series"
+        folder.mkdir()
+        media = folder / "preserved.mp4"
+        media.write_bytes(b"precious-attempt")
+        series_id = str(uuid.uuid4())
+        artifact_id = str(uuid.uuid4())
+        document = {
+            "title": "Saved series",
+            "brief": "",
+            "template": "movie",
+            "settings": {},
+            "references": {"images": [], "videos": [], "audio": []},
+            "shots": [],
+            "active_shot": None,
+            "pause_requested": False,
+            "cancel_requested": False,
+            "error": None,
+            "artifacts": [{
+                "id": artifact_id,
+                "kind": "shot",
+                "label": "Preserved attempt",
+                "storage": "output",
+                "locator": {
+                    "filename": media.name,
+                    "subfolder": "series",
+                    "type": "output",
+                    "media_type": "video",
+                },
+                "mime": "video/mp4",
+                "download_name": media.name,
+                "metadata": {},
+            }],
+        }
+        self.client.app[SERIES_KEY].create(series_id, document, status="completed")
+        response = await self.client.get(
+            f"/api/series/{series_id}/artifacts/{artifact_id}",
+            headers={"Range": "bytes=9-15"},
+        )
+        self.assertEqual(response.status, 206)
+        self.assertEqual(await response.read(), b"attempt")
+        unknown = await self.client.get(
+            f"/api/series/{series_id}/artifacts/{uuid.uuid4()}"
+        )
+        self.assertEqual(unknown.status, 404)
 
     async def test_unknown_job_is_not_owned(self) -> None:
         response = await self.client.get(f"/api/jobs/{uuid.uuid4()}")

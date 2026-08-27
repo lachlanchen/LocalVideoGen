@@ -110,6 +110,7 @@ class UploadedAsset:
     kind: str
     path: str
     original_name: str = ""
+    metadata: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

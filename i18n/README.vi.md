@@ -24,6 +24,19 @@ Giao diện sáng trình bày rõ việc thiết lập tham chiếu, điều khi
 
 ![Giao diện sáng H3 Studio với điều khiển tham chiếu và render MiniMax H3 cục bộ](../docs/images/h3-studio-light.png)
 
+## Tạo loạt video
+
+Bạn có thể chuyển giữa **Single Clip** và **Series** ngay trong H3 Studio. Chế độ series có mẫu hướng dẫn **LALACHAN Series** với bảy ô được đặt tên cho nhân vật/đạo cụ, cùng mẫu trung tính **My Movie** cho mọi dàn nhân vật hoặc phong cách hình ảnh.
+
+![Bảng đạo diễn series video với giao diện sáng của H3 Studio](../docs/images/h3-studio-series-light.png)
+
+- Chỉ tải lên một lần các tham chiếu chung về nhân vật, thế giới, giọng nói và chuyển động, sau đó sắp xếp 2–12 thẻ cảnh có thể chỉnh sửa với prompt, thời lượng và seed riêng.
+- Một cổng tiếp nhận dùng chung giữ mọi lượt render H3 hoàn toàn tuần tự. Sau khi một cảnh chưa phải cuối vượt qua kiểm tra đầy đủ video/âm thanh, khung hình cuối chính xác và ba giây cuối của cảnh đó trở thành tham chiếu liên tục cho cảnh kế tiếp.
+- Tạm dừng sau cảnh hiện tại, tiếp tục sau khi khởi động lại, tạo lại một cảnh và các cảnh sau, hoặc thử lại hậu kỳ/ghép cuối mà không tốn GPU cho MP4 đã hợp lệ.
+- Mọi lần render đều được giữ lại. Phim cuối chỉ được ghép bằng sao chép luồng không suy hao sau khi kiểm tra số khung hình, 24 fps, âm thanh stereo, giải mã toàn bộ và SHA-256; tệp manifest xác thực cũng được lưu.
+
+Quy trình lấy cảm hứng từ sự rõ ràng của storyboard Xiaoyunque, nhưng toàn bộ việc tạo video và trạng thái dự án vẫn ở trên máy trạm này qua loopback. Không gọi Xiaoyunque hay dịch vụ tạo nội dung đám mây trả phí nào.
+
 ## Những gì dự án cung cấp
 
 - Preset chất lượng cao nhất: DiT Ref2VA/FL2VA BF16 đã lược gọn, conditioner Qwen3-VL NVFP4-AWQ đã căn chỉnh, VAE video FP16, VAE âm thanh FP32 và 25 bước toàn mô hình.
@@ -105,7 +118,7 @@ Tạo và xác thực workflow tĩnh, đồng thời chạy kiểm thử webapp 
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

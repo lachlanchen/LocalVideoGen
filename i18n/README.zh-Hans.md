@@ -24,6 +24,19 @@ LocalVideoGen 是一个可复现的运行层，围绕固定版本的外部 Comfy
 
 ![展示本地 MiniMax H3 参考素材与渲染控制的 H3 Studio 浅色主题](../docs/images/h3-studio-light.png)
 
+## 制作视频系列
+
+无需离开 H3 Studio，即可在 **Single Clip** 与 **Series** 之间切换。系列模式提供带七个命名角色/道具槽位的引导式 **LALACHAN Series** 预设，也提供适合任意演员与视觉风格的中性 **My Movie** 预设。
+
+![H3 Studio 浅色主题视频系列导演台](../docs/images/h3-studio-series-light.png)
+
+- 演员、世界观、声音和动作参考只需上传一次，然后可编排 2–12 张分镜卡；每张卡都能独立编辑提示词、时长和种子。
+- 一个共享准入门确保所有 H3 渲染严格串行。每个非结尾分镜通过完整音视频检查后，其精确最后一帧与末尾三秒会自动成为下一镜的连续性参考。
+- 可在当前分镜结束后暂停、重启后继续、重做某一镜及后续镜头，也可只重试后处理或最终拼接，不会为已经有效的 MP4 再花 GPU 时间。
+- 每次渲染尝试都会保留。最终影片只有在帧数、24 fps、立体声、完整解码与 SHA-256 全部通过后，才以无损流复制方式拼接；验证清单也会一并保存。
+
+这一工作流借鉴了小云雀分镜体验的清晰度，但所有生成与项目状态都通过本机回环保留在这台工作站上；不会调用小云雀或任何付费云端生成服务。
+
 ## 能力概览
 
 - 最高质量预设：裁剪版 BF16 Ref2VA/FL2VA DiT、对齐的 NVFP4-AWQ Qwen3-VL 条件编码器、FP16 视频 VAE、FP32 音频 VAE，以及完整模型 25 步采样。
@@ -105,7 +118,7 @@ cd LocalVideoGen
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

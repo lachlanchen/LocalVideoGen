@@ -24,6 +24,19 @@ Le thème clair réunit lisiblement la préparation des références, les régla
 
 ![Thème clair de H3 Studio avec les contrôles locaux de références et de rendu MiniMax H3](../docs/images/h3-studio-light.png)
 
+## Créer une série vidéo
+
+H3 Studio permet de passer de **Single Clip** à **Series** sans changer d'espace de travail. Le mode série propose le modèle guidé **LALACHAN Series**, avec sept emplacements nommés pour personnages et accessoires, ainsi que le modèle neutre **My Movie** pour toute distribution ou direction visuelle.
+
+![Tableau de réalisation de séries vidéo dans le thème clair de H3 Studio](../docs/images/h3-studio-series-light.png)
+
+- Importez une seule fois les références communes de personnages, univers, voix et mouvement, puis organisez de 2 à 12 cartes de plan modifiables avec leur propre prompt, durée et graine.
+- Une porte d'admission unique maintient tous les rendus H3 strictement séquentiels. Après validation complète de la vidéo et de l'audio d'un plan non final, son image finale exacte et ses trois dernières secondes deviennent les références de continuité du plan suivant.
+- Mettez en pause après le plan courant, reprenez après un redémarrage, régénérez un plan et sa suite, ou relancez le post-traitement et l'assemblage final sans dépenser de GPU pour un MP4 déjà valide.
+- Chaque tentative est conservée. Le film final n'est assemblé par copie de flux sans perte qu'après contrôle du nombre d'images, des 24 fps, de l'audio stéréo, du décodage intégral et du SHA-256 ; un manifeste de validation est également gardé.
+
+Le parcours reprend la clarté du storyboard de Xiaoyunque, mais la génération et l'état du projet restent entièrement sur cette station via loopback. Aucun appel n'est envoyé à Xiaoyunque ni à un service cloud payant.
+
 ## Fonctionnalités
 
 - Profil de qualité maximale : DiT Ref2VA/FL2VA élagué en BF16, conditionneur Qwen3-VL NVFP4-AWQ aligné, VAE vidéo FP16, VAE audio FP32 et 25 étapes du modèle complet.
@@ -105,7 +118,7 @@ Générez et validez les workflows statiques, puis exécutez les tests web sans 
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

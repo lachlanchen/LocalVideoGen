@@ -24,6 +24,19 @@ Das helle Design zeigt Referenzeinrichtung, Qualitätsregler und Renderstatus ü
 
 ![Helles H3-Studio-Design mit lokalen MiniMax-H3-Referenz- und Renderreglern](../docs/images/h3-studio-light.png)
 
+## Eine Videoserie erstellen
+
+In H3 Studio lässt sich direkt zwischen **Single Clip** und **Series** wechseln. Der Serienmodus bietet die geführte Vorlage **LALACHAN Series** mit sieben benannten Figuren-/Requisitenplätzen sowie **My Movie** als neutrale Vorlage für beliebige Besetzungen und Bildstile.
+
+![H3-Studio-Regieansicht für Videoserien im hellen Design](../docs/images/h3-studio-series-light.png)
+
+- Gemeinsame Figuren-, Welt-, Stimm- und Bewegungsreferenzen werden einmal hochgeladen; anschließend lassen sich 2–12 Shot-Karten mit eigenem Prompt, eigener Dauer und eigenem Seed anordnen.
+- Eine gemeinsame Zulassungssperre hält alle H3-Renderings strikt sequenziell. Nach vollständiger Video-/Audio-Prüfung eines nicht letzten Shots dienen dessen exaktes Schlussbild und letzte drei Sekunden als Kontinuitätsreferenzen für den nächsten Shot.
+- Nach dem aktuellen Shot pausieren, nach einem Neustart fortsetzen, einen Shot samt Folgeshots wiederholen oder Nachbearbeitung und Endmontage erneut ausführen – ohne GPU-Zeit für bereits gültige MP4-Dateien zu verbrauchen.
+- Jeder Render-Versuch bleibt erhalten. Der fertige Film wird erst nach Prüfung von Bildzahl, 24 fps, Stereo-Audio, vollständigem Decode und SHA-256 verlustfrei per Stream-Copy zusammengesetzt; ein Prüfmanifest bleibt daneben erhalten.
+
+Der Ablauf übernimmt die klare Storyboard-Idee von Xiaoyunque, doch Generierung und Projektzustand bleiben per Loopback vollständig auf dieser Workstation. Xiaoyunque oder ein kostenpflichtiger Cloud-Generator wird nicht aufgerufen.
+
 ## Leistungsumfang
 
 - Höchste Qualitätsstufe: beschnittenes BF16 Ref2VA/FL2VA DiT, ausgerichteter NVFP4-AWQ Qwen3-VL-Conditioner, FP16-Video-VAE, FP32-Audio-VAE und 25 Vollmodellschritte.
@@ -105,7 +118,7 @@ Statische Workflows und Webapp-Tests lassen sich ohne Renderauftrag ausführen:
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

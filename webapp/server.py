@@ -24,9 +24,30 @@ from aiohttp import web
 
 from . import __version__
 from .comfy_client import ComfyClient, ComfyError, flatten_outputs
-from .job_store import JobStore, JobStoreError, JobStoreValidationError
+from .job_store import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    JobStore,
+    JobStoreError,
+    JobStoreValidationError,
+)
 from .media import DEFAULT_LIMITS, prepare_upload
-from .workflows import RequestError, UploadedAsset, compile_prompt, parse_render_spec, public_config
+from .series_media import SeriesMedia, SeriesMediaError
+from .series_runner import (
+    LALACHAN_REFERENCE_LABELS,
+    SeriesRunner,
+    build_series_document,
+    find_artifact,
+    public_series,
+    public_series_summary,
+)
+from .series_store import (
+    SeriesStore,
+    SeriesStoreError,
+    SeriesStoreValidationError,
+    canonical_series_id,
+)
+from .workflows import PROFILES, RequestError, UploadedAsset, compile_prompt, parse_render_spec, public_config
 
 
 LOGGER = logging.getLogger("h3-webapp")
@@ -34,6 +55,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 STATIC_ROOT = PACKAGE_ROOT / "static"
 DEFAULT_JOB_DB = PROJECT_ROOT / "runtime" / "private" / "webapp-jobs.sqlite3"
+DEFAULT_SERIES_DB = PROJECT_ROOT / "runtime" / "private" / "webapp-series.sqlite3"
+DEFAULT_SERIES_ARTIFACT_ROOT = PROJECT_ROOT / "runtime" / "private" / "series-artifacts"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "ComfyUI" / "output"
 START_ENGINE_COMMAND = f"cd {PROJECT_ROOT} && H3_CUDA_DEVICES=0,1 ./scripts/start_comfyui.sh"
 COMFY_KEY = web.AppKey("h3.comfy")
@@ -41,6 +64,10 @@ ASSETS_KEY = web.AppKey("h3.assets")
 JOBS_KEY = web.AppKey("h3.jobs")
 OUTPUT_ROOT_KEY = web.AppKey("h3.output_root")
 JOB_WATCHER_KEY = web.AppKey("h3.job_watcher")
+SERIES_KEY = web.AppKey("h3.series")
+SERIES_MEDIA_KEY = web.AppKey("h3.series_media")
+SERIES_RUNNER_KEY = web.AppKey("h3.series_runner")
+SUBMISSION_LOCK_KEY = web.AppKey("h3.submission_lock")
 MISSING_JOB_GRACE_MS = 5 * 60 * 1000
 
 UPLOAD_RULES: dict[str, dict[str, Any]] = {
@@ -98,6 +125,13 @@ class AssetRegistry:
             raise RequestError(f"the {kind} upload expired or is invalid; upload it again")
         self._items.move_to_end(token)
         return record.asset
+
+    def valid(self, token: Any, kind: Any) -> bool:
+        self.purge()
+        if not isinstance(token, str) or not isinstance(kind, str):
+            return False
+        record = self._items.get(token)
+        return record is not None and record.asset.kind == kind
 
     def purge(self) -> None:
         cutoff = time.time() - self.ttl
@@ -305,15 +339,23 @@ def _sync_stored_job(store: JobStore, job_id: str, job: Mapping[str, Any]) -> di
     if current is None:
         raise web.HTTPNotFound(text="job not found")
     status = _normalized_job_status(job.get("status"), str(current["status"]))
-    terminal = {"completed", "failed", "cancelled"}
-    if current.get("status") in terminal and status not in terminal:
-        status = str(current["status"])
+    current_status = str(current["status"])
+    current_terminal = current_status in TERMINAL_STATUSES
+    # Terminal observations are monotonic.  A completed artifact has highest
+    # precedence; stale active/failed/cancelled responses must never hide it.
+    if current_status == "completed" or (
+        current_terminal and status != "completed"
+    ):
+        status = current_status
     updates: dict[str, Any] = {}
     if isinstance(job.get("outputs"), Mapping):
         outputs = flatten_outputs(job)
-        if outputs != current.get("outputs"):
+        current_outputs = current.get("outputs") or []
+        if outputs != current_outputs and (
+            not current_terminal or (outputs and not current_outputs)
+        ):
             updates["outputs"] = outputs
-    if "execution_error" in job:
+    if not current_terminal and "execution_error" in job:
         error = _job_error(job)
         if error != current.get("error"):
             updates["error"] = error
@@ -323,6 +365,28 @@ def _sync_stored_job(store: JobStore, job_id: str, job: Mapping[str, Any]) -> di
     if status_update is None and not updates:
         return current
     return store.update(job_id, status_update, **updates)
+
+
+def _cancel_stored_job_if_active(
+    store: JobStore, job_id: str, *, error: str | None = None
+) -> dict[str, Any]:
+    """Synchronously terminalize cancellation unless a watcher already won."""
+
+    latest = store.get(job_id)
+    if latest is None:
+        raise web.HTTPNotFound(text="job not found")
+    if latest["status"] not in ACTIVE_STATUSES:
+        return latest
+    return store.update(job_id, "cancelled", error=error)
+
+
+def _cancel_response(record: Mapping[str, Any], *, already_missing: bool = False):
+    if record.get("status") == "completed":
+        return web.json_response({"cancelled": False, "already_completed": True})
+    body = {"cancelled": record.get("status") == "cancelled"}
+    if already_missing:
+        body["already_missing"] = True
+    return web.json_response(body)
 
 
 def _terminalize_missing_job(store: JobStore, record: Mapping[str, Any], error: ComfyError) -> dict[str, Any]:
@@ -444,7 +508,12 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
         return await handler(request)
     except web.HTTPException:
         raise
-    except (RequestError, JobStoreValidationError, ValueError) as exc:
+    except (
+        RequestError,
+        JobStoreValidationError,
+        SeriesStoreValidationError,
+        ValueError,
+    ) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except ComfyError as exc:
         LOGGER.warning("ComfyUI request failed: %s", exc)
@@ -455,6 +524,12 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
     except JobStoreError:
         LOGGER.exception("Durable job registry failure")
         return web.json_response({"error": "the private job registry is unavailable"}, status=503)
+    except SeriesStoreError:
+        LOGGER.exception("Durable series registry failure")
+        return web.json_response({"error": "the private series registry is unavailable"}, status=503)
+    except SeriesMediaError as exc:
+        LOGGER.warning("Series media request failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=409)
     except Exception:
         LOGGER.exception("Unhandled webapp request error")
         return web.json_response({"error": "internal webapp error"}, status=500)
@@ -465,6 +540,9 @@ def create_app(
     *,
     job_store: JobStore | None = None,
     output_root: Path | None = None,
+    series_store: SeriesStore | None = None,
+    series_media: SeriesMedia | None = None,
+    series_runner: SeriesRunner | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=620 * 1024 * 1024,
@@ -473,7 +551,45 @@ def create_app(
     app[COMFY_KEY] = client or ComfyClient("http://127.0.0.1:8188")
     app[ASSETS_KEY] = AssetRegistry()
     app[JOBS_KEY] = job_store or JobStore(DEFAULT_JOB_DB)
+    app[SUBMISSION_LOCK_KEY] = asyncio.Lock()
     app[OUTPUT_ROOT_KEY] = (output_root or DEFAULT_OUTPUT_ROOT).resolve()
+    if series_store is None:
+        series_db = (
+            app[JOBS_KEY].path.with_name("webapp-series.sqlite3")
+            if job_store is not None
+            else DEFAULT_SERIES_DB
+        )
+        series_store = SeriesStore(series_db)
+    app[SERIES_KEY] = series_store
+    if series_media is None:
+        artifact_root = (
+            app[JOBS_KEY].path.parent / "series-artifacts"
+            if job_store is not None or output_root is not None
+            else DEFAULT_SERIES_ARTIFACT_ROOT
+        )
+        series_media = SeriesMedia(app[OUTPUT_ROOT_KEY], artifact_root)
+    app[SERIES_MEDIA_KEY] = series_media
+
+    async def verify_series_runtime() -> None:
+        verified, note = await _project_comfy_status(app[COMFY_KEY])
+        if not verified:
+            raise ComfyError(note, status=409)
+
+    async def verify_series_submission() -> None:
+        await verify_series_runtime()
+        model_status, model_note = await _local_model_status()
+        if model_status != "verified":
+            raise ComfyError(model_note, status=409)
+
+    app[SERIES_RUNNER_KEY] = series_runner or SeriesRunner(
+        app[SERIES_KEY],
+        app[JOBS_KEY],
+        app[COMFY_KEY],
+        app[SERIES_MEDIA_KEY],
+        submission_lock=app[SUBMISSION_LOCK_KEY],
+        runtime_check=verify_series_runtime,
+        submission_check=verify_series_submission,
+    )
 
     async def watch_jobs(application: web.Application) -> None:
         while True:
@@ -504,8 +620,10 @@ def create_app(
         if verified:
             await application[COMFY_KEY].open()
         application[JOB_WATCHER_KEY] = asyncio.create_task(watch_jobs(application), name="h3-job-registry-sync")
+        application[SERIES_RUNNER_KEY].start()
 
     async def on_cleanup(application: web.Application) -> None:
+        await application[SERIES_RUNNER_KEY].close()
         task = application.get(JOB_WATCHER_KEY)
         if task is not None:
             task.cancel()
@@ -537,6 +655,18 @@ def create_app(
         data = public_config()
         data["version"] = __version__
         data["engine_start_command"] = START_ENGINE_COMMAND
+        data["series"] = {
+            "templates": ["lalachan", "movie"],
+            "shot_min": 2,
+            "shot_max": 12,
+            "total_seconds_max": 180,
+            "shared_images_max": 8,
+            "shared_videos_max": 2,
+            "shared_audio_max": 3,
+            "continuity_seconds": [0, 2, 3, 4],
+            "lalachan_picture_labels": list(LALACHAN_REFERENCE_LABELS),
+            "sequential_only": True,
+        }
         return web.json_response(data)
 
     @routes.get("/api/health")
@@ -641,7 +771,12 @@ def create_app(
             finally:
                 prepared.cleanup()
 
-        asset = UploadedAsset(kind=kind, path=result["path"], original_name=original)
+        asset = UploadedAsset(
+            kind=kind,
+            path=result["path"],
+            original_name=original,
+            metadata=metadata,
+        )
         record = request.app[ASSETS_KEY].register(asset, normalized_size)
         return web.json_response(
             {
@@ -654,6 +789,31 @@ def create_app(
             },
             status=201,
         )
+
+    @routes.post("/api/uploads/validate")
+    async def validate_uploads(request: web.Request) -> web.Response:
+        payload = await request.json(loads=__import__("json").loads)
+        if not isinstance(payload, Mapping):
+            raise RequestError("request body must be a JSON object")
+        uploads = payload.get("uploads")
+        if isinstance(uploads, (str, bytes)) or not isinstance(uploads, list):
+            raise RequestError("uploads must be a list")
+        if len(uploads) > 32:
+            raise RequestError("at most 32 upload handles can be validated at once")
+        registry = request.app[ASSETS_KEY]
+        valid: list[str] = []
+        for item in uploads:
+            if not isinstance(item, Mapping):
+                raise RequestError("each upload handle must be an object")
+            token = item.get("token")
+            kind = item.get("kind")
+            if kind not in UPLOAD_RULES:
+                raise RequestError("upload kind must be image, video, or audio")
+            if not isinstance(token, str) or not token or len(token) > 256:
+                raise RequestError("upload token must be non-empty text")
+            if registry.valid(token, kind):
+                valid.append(token)
+        return web.json_response({"valid": valid})
 
     @routes.post("/api/renders")
     async def render(request: web.Request) -> web.Response:
@@ -697,14 +857,208 @@ def create_app(
                 "audio": [asset.original_name for asset in spec.ref_audios],
             },
         }
-        request.app[JOBS_KEY].register(prompt_id, metadata, status="submitting")
-        try:
-            result = await request.app[COMFY_KEY].submit(prompt, metadata, prompt_id)
-        except Exception as exc:
-            request.app[JOBS_KEY].update(prompt_id, "failed", error=str(exc)[:8192])
-            raise
-        request.app[JOBS_KEY].update(prompt_id, "pending", error=None)
+        async with request.app[SUBMISSION_LOCK_KEY]:
+            if request.app[JOBS_KEY].active(limit=1):
+                raise ComfyError(
+                    "Another local H3 render is active; wait for it to finish before starting a Single Clip.",
+                    status=409,
+                )
+            request.app[JOBS_KEY].register(prompt_id, metadata, status="submitting")
+            try:
+                result = await request.app[COMFY_KEY].submit(prompt, metadata, prompt_id)
+            except Exception as exc:
+                request.app[JOBS_KEY].update(prompt_id, "failed", error=str(exc)[:8192])
+                raise
+            request.app[JOBS_KEY].update(prompt_id, "pending", error=None)
         return web.json_response({"id": result["prompt_id"], "number": result.get("number"), "render": metadata}, status=202)
+
+    def series_record(request: web.Request) -> tuple[str, dict[str, Any]]:
+        series_id = canonical_series_id(request.match_info["series_id"])
+        record = request.app[SERIES_KEY].get(series_id)
+        if record is None:
+            raise web.HTTPNotFound(text="series not found")
+        return series_id, record
+
+    async def series_payload(request: web.Request) -> Mapping[str, Any]:
+        payload = await request.json(loads=json.loads)
+        if not isinstance(payload, Mapping):
+            raise RequestError("request body must be a JSON object")
+        return payload
+
+    def resolved_series_document(request: web.Request, payload: Mapping[str, Any]) -> dict[str, Any]:
+        registry = request.app[ASSETS_KEY]
+
+        def resolve(token: Any, kind: str, optional: bool) -> UploadedAsset | None:
+            return registry.resolve(token, kind, optional=optional)
+
+        return build_series_document(payload, resolve)
+
+    @routes.post("/api/series")
+    async def create_series(request: web.Request) -> web.Response:
+        payload = await series_payload(request)
+        document = resolved_series_document(request, payload)
+        record = request.app[SERIES_KEY].create(str(uuid.uuid4()), document, status="ready")
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=201)
+
+    @routes.get("/api/series")
+    async def list_series(request: web.Request) -> web.Response:
+        try:
+            limit = int(request.query.get("limit", "40"))
+        except ValueError as exc:
+            raise RequestError("limit must be an integer") from exc
+        records = request.app[SERIES_KEY].list(limit=limit)
+        # The store's scheduler order is oldest-first; the library is newest-first.
+        records.sort(key=lambda item: (item["updated_ms"], item["created_ms"]), reverse=True)
+        series = [public_series_summary(record) for record in records]
+        return web.json_response(
+            {"series": series, "pagination": {"count": len(series), "limit": limit}}
+        )
+
+    @routes.get("/api/series/{series_id}")
+    async def get_series(request: web.Request) -> web.Response:
+        _, record = series_record(request)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]))
+
+    @routes.put("/api/series/{series_id}")
+    async def update_series(request: web.Request) -> web.Response:
+        series_id, existing = series_record(request)
+        if existing["status"] != "ready":
+            raise RequestError("only a ready series can be edited")
+        payload = await series_payload(request)
+        replacement = resolved_series_document(request, payload)
+
+        def replace(_: dict[str, Any], status: str):
+            if status != "ready":
+                raise RequestError("only a ready series can be edited")
+            return replacement, "ready"
+
+        record = request.app[SERIES_KEY].mutate(series_id, replace)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]))
+
+    @routes.post("/api/series/{series_id}/start")
+    async def start_series(request: web.Request) -> web.Response:
+        series_id, existing = series_record(request)
+        if existing["status"] != "ready":
+            raise RequestError("only a ready series can start")
+        if not getattr(request.app[SERIES_MEDIA_KEY], "available", True):
+            raise ComfyError(
+                "ffmpeg and ffprobe are required for series validation", status=409
+            )
+        await _require_project_comfy(request)
+        model_status, model_note = await _local_model_status()
+        if model_status != "verified":
+            raise ComfyError(model_note, status=409)
+        readiness = await request.app[COMFY_KEY].health(inspect_nodes=True)
+        if readiness.get("ready") is False:
+            missing = ", ".join(readiness.get("missing_nodes") or [])
+            raise ComfyError(
+                f"ComfyUI is missing required H3 nodes{': ' + missing if missing else ''}",
+                status=409,
+            )
+        profile_id = str(existing["document"]["settings"]["profile"])
+        devices = readiness.get("stats", {}).get("devices", [])
+        if PROFILES[profile_id].dual_gpu and (not isinstance(devices, list) or len(devices) < 2):
+            raise ComfyError("The selected profile requires both RTX 4090 GPUs", status=409)
+
+        def queue(document: dict[str, Any], status: str):
+            if status != "ready":
+                raise RequestError("only a ready series can start")
+            document["error"] = None
+            document["pause_requested"] = False
+            document["cancel_requested"] = False
+            return document, "queued"
+
+        record = request.app[SERIES_KEY].mutate(series_id, queue)
+        request.app[SERIES_RUNNER_KEY].wake()
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.post("/api/series/{series_id}/pause")
+    async def pause_series(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        record = await request.app[SERIES_RUNNER_KEY].pause(series_id)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.post("/api/series/{series_id}/resume")
+    async def resume_series(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        record = request.app[SERIES_RUNNER_KEY].resume(series_id)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.post("/api/series/{series_id}/cancel-active")
+    async def cancel_active_series(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        await _require_project_comfy(request)
+        record = await request.app[SERIES_RUNNER_KEY].cancel(series_id)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    async def retry_series_shot(
+        request: web.Request, series_id: str, shot_index: int
+    ) -> web.Response:
+        payload: Mapping[str, Any] = {}
+        if request.can_read_body:
+            payload = await series_payload(request)
+        regenerate_following = payload.get("regenerate_following", False)
+        record = await request.app[SERIES_RUNNER_KEY].retry(
+            series_id,
+            shot_index,
+            regenerate_following=regenerate_following,
+        )
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.post("/api/series/{series_id}/shots/{shot_index}/retry")
+    async def retry_shot(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        try:
+            shot_index = int(request.match_info["shot_index"])
+        except ValueError as exc:
+            raise RequestError("shot_index must be an integer") from exc
+        return await retry_series_shot(request, series_id, shot_index)
+
+    @routes.post("/api/series/{series_id}/retry")
+    async def retry_shot_alias(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        payload = await series_payload(request)
+        try:
+            shot_index = int(payload.get("shot_index"))
+        except (TypeError, ValueError) as exc:
+            raise RequestError("shot_index must be an integer") from exc
+        regenerate_following = payload.get("regenerate_following", False)
+        record = await request.app[SERIES_RUNNER_KEY].retry(
+            series_id,
+            shot_index,
+            regenerate_following=regenerate_following,
+        )
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.post("/api/series/{series_id}/retry-finalization")
+    async def retry_series_finalization(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        record = await request.app[SERIES_RUNNER_KEY].retry_finalization(series_id)
+        return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.get("/api/series/{series_id}/artifacts/{artifact_id}")
+    async def series_artifact(request: web.Request) -> web.StreamResponse:
+        series_id, record = series_record(request)
+        artifact_id = canonical_series_id(request.match_info["artifact_id"])
+        artifact = find_artifact(record, artifact_id)
+        if artifact is None:
+            raise web.HTTPNotFound(text="artifact not found")
+        try:
+            if artifact.get("storage") == "output" and isinstance(artifact.get("locator"), Mapping):
+                path = request.app[SERIES_MEDIA_KEY].output_path(artifact["locator"])
+            elif artifact.get("storage") == "series" and isinstance(artifact.get("relative"), str):
+                path = request.app[SERIES_MEDIA_KEY].artifact_path(series_id, artifact["relative"])
+            else:
+                raise SeriesMediaError("series artifact storage is invalid")
+        except SeriesMediaError as exc:
+            raise web.HTTPNotFound(text="artifact not found") from exc
+        response = web.FileResponse(path)
+        response.content_type = str(artifact.get("mime") or "application/octet-stream")
+        if request.query.get("download") == "1":
+            raw_name = PurePosixPath(str(artifact.get("download_name") or "series-artifact")).name
+            safe_name = raw_name.replace('"', "_").replace("\\", "_")[:180]
+            response.headers["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+        return response
 
     @routes.get("/api/jobs")
     async def jobs(request: web.Request) -> web.Response:
@@ -759,7 +1113,8 @@ def create_app(
     @routes.post("/api/jobs/{job_id}/cancel")
     async def cancel(request: web.Request) -> web.Response:
         job_id = _canonical_uuid(request.match_info["job_id"])
-        if not request.app[JOBS_KEY].owns(job_id):
+        stored = request.app[JOBS_KEY].get(job_id)
+        if stored is None:
             raise web.HTTPNotFound(text="job not found")
         await _require_project_comfy(request)
         try:
@@ -767,28 +1122,31 @@ def create_app(
         except ComfyError as exc:
             if exc.status != 404:
                 raise
-            request.app[JOBS_KEY].update(
+            stored = _cancel_stored_job_if_active(
+                request.app[JOBS_KEY],
                 job_id,
-                "cancelled",
                 error="The local engine no longer had this job.",
             )
-            return web.json_response({"cancelled": True, "already_missing": True})
+            return _cancel_response(stored, already_missing=True)
         if result.get("cancelled") is True:
-            request.app[JOBS_KEY].update(job_id, "cancelled")
+            stored = _cancel_stored_job_if_active(request.app[JOBS_KEY], job_id)
+            if stored["status"] == "completed":
+                return _cancel_response(stored)
         else:
             try:
                 record = await request.app[COMFY_KEY].get_job(job_id)
                 if isinstance(record, Mapping):
-                    _sync_stored_job(request.app[JOBS_KEY], job_id, record)
+                    stored = _sync_stored_job(request.app[JOBS_KEY], job_id, record)
             except ComfyError as exc:
                 if exc.status == 404:
-                    request.app[JOBS_KEY].update(
+                    stored = _cancel_stored_job_if_active(
+                        request.app[JOBS_KEY],
                         job_id,
-                        "cancelled",
                         error="The local engine no longer had this job.",
                     )
-                    return web.json_response({"cancelled": True, "already_missing": True})
+                    return _cancel_response(stored, already_missing=True)
                 raise
+            return _cancel_response(stored)
         return web.json_response(result)
 
     @routes.get("/api/jobs/{job_id}/outputs/{output_id}")

@@ -24,6 +24,19 @@ LocalVideoGen は、バージョン固定された外部 ComfyUI 環境と公式
 
 ![MiniMax H3 のローカル参照設定とレンダー操作を表示する H3 Studio のライトテーマ](../docs/images/h3-studio-light.png)
 
+## 動画シリーズを作る
+
+H3 Studio 内で **Single Clip** と **Series** を切り替えられます。シリーズモードには、キャラクターと小道具用の名前付き7枠を備えた **LALACHAN Series** プリセットと、任意の登場人物・映像スタイルに使える中立的な **My Movie** プリセットがあります。
+
+![H3 Studio ライトテーマの動画シリーズ演出ボード](../docs/images/h3-studio-series-light.png)
+
+- キャスト、世界観、声、動きの共通参照を一度だけアップロードし、個別のプロンプト・尺・シードを持つ2～12枚のショットカードを編集・並べ替えできます。
+- 共通の受付ゲートにより、H3レンダーは常に1本ずつ順番に実行されます。最終以外のショットが映像・音声の完全検証を通過すると、正確な最終フレームと末尾3秒が次のショットの連続性参照になります。
+- 現在のショット後に一時停止し、再起動後に再開できます。特定ショット以降の再生成や、既に有効なMP4を再生成せずに後処理・最終結合だけを再試行することもできます。
+- すべての生成試行を保持します。フレーム数、24 fps、ステレオ音声、完全デコード、SHA-256を確認した後にのみ、無劣化のストリームコピーで最終動画を結合し、検証マニフェストも保存します。
+
+操作の分かりやすさは Xiaoyunque のストーリーボード体験を参考にしていますが、生成とプロジェクト状態は loopback 経由でこのワークステーション内に留まります。Xiaoyunque や有料クラウド生成サービスは呼び出しません。
+
 ## 提供する機能
 
 - 最高品質プリセット：pruned BF16 Ref2VA/FL2VA DiT、アライン済み NVFP4-AWQ Qwen3-VL conditioner、FP16 video VAE、FP32 audio VAE、フルモデル 25 ステップ。
@@ -105,7 +118,7 @@ cd LocalVideoGen
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

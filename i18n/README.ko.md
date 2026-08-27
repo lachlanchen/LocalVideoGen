@@ -24,6 +24,19 @@ LocalVideoGen은 버전이 고정된 외부 ComfyUI 설치와 공식 정렬 Mini
 
 ![MiniMax H3 로컬 참조 및 렌더 제어가 표시된 H3 Studio 라이트 테마](../docs/images/h3-studio-light.png)
 
+## 비디오 시리즈 만들기
+
+H3 Studio 안에서 **Single Clip**과 **Series**를 전환할 수 있습니다. 시리즈 모드는 캐릭터·소품용 이름표가 붙은 7개 슬롯의 **LALACHAN Series** 프리셋과, 어떤 출연진이나 영상 스타일에도 쓸 수 있는 중립적인 **My Movie** 프리셋을 제공합니다.
+
+![H3 Studio 라이트 테마 비디오 시리즈 연출 보드](../docs/images/h3-studio-series-light.png)
+
+- 출연진, 세계관, 음성, 동작의 공용 참조를 한 번만 업로드한 뒤, 각각의 프롬프트·길이·시드를 가진 2~12개 쇼트 카드를 편집하고 재배열합니다.
+- 하나의 공용 승인 게이트가 모든 H3 렌더를 엄격히 순차 실행합니다. 마지막이 아닌 쇼트가 영상·음성 전체 검증을 통과하면 정확한 마지막 프레임과 끝 3초가 다음 쇼트의 연속성 참조가 됩니다.
+- 현재 쇼트 뒤에 일시 정지하고 재시작 후 계속할 수 있습니다. 특정 쇼트와 후속 쇼트를 다시 만들거나, 이미 유효한 MP4에 GPU를 다시 쓰지 않고 후처리와 최종 결합만 재시도할 수 있습니다.
+- 모든 렌더 시도를 보존합니다. 프레임 수, 24 fps, 스테레오 오디오, 전체 디코드, SHA-256 검사를 통과한 뒤에만 무손실 스트림 복사로 최종 영화를 결합하며 검증 매니페스트도 함께 남깁니다.
+
+작업 흐름은 Xiaoyunque 스토리보드의 명료함에서 영감을 받았지만 생성과 프로젝트 상태는 loopback을 통해 이 워크스테이션 안에만 유지됩니다. Xiaoyunque나 유료 클라우드 생성 서비스를 호출하지 않습니다.
+
 ## 제공 기능
 
 - 최고 품질 프리셋: pruned BF16 Ref2VA/FL2VA DiT, 정렬된 NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, 전체 모델 25단계.
@@ -105,7 +118,7 @@ cd LocalVideoGen
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 

@@ -24,6 +24,19 @@ El tema claro reúne de forma legible la configuración de referencias, los cont
 
 ![Tema claro de H3 Studio con controles locales de referencias y render MiniMax H3](../docs/images/h3-studio-light.png)
 
+## Crear una serie de vídeo
+
+H3 Studio permite alternar entre **Single Clip** y **Series** sin salir del espacio de trabajo. El modo de serie incluye la plantilla guiada **LALACHAN Series**, con siete espacios con nombre para personajes y objetos, y la plantilla neutra **My Movie** para cualquier reparto o estilo visual.
+
+![Panel de dirección de series de vídeo con el tema claro de H3 Studio](../docs/images/h3-studio-series-light.png)
+
+- Sube una sola vez las referencias compartidas de reparto, mundo, voces y movimiento, y organiza entre 2 y 12 tarjetas de plano editables con prompt, duración y semilla propios.
+- Una única puerta de admisión mantiene todos los renders H3 estrictamente secuenciales. Tras validar por completo el vídeo y audio de cada plano no final, su fotograma final exacto y sus últimos tres segundos pasan a ser referencias de continuidad del plano siguiente.
+- Pausa después del plano actual, reanuda tras reiniciar, repite un plano y los posteriores, o reintenta el posprocesado y el montaje final sin gastar GPU en un MP4 que ya es válido.
+- Se conserva cada intento. La película final se ensambla mediante copia de flujos sin pérdida solo después de comprobar fotogramas, 24 fps, audio estéreo, decodificación completa y SHA-256; también se guarda un manifiesto de validación.
+
+El flujo toma como referencia la claridad del storyboard de Xiaoyunque, pero la generación y el estado del proyecto permanecen en esta estación mediante loopback. No llama a Xiaoyunque ni a servicios de generación en la nube de pago.
+
 ## Qué ofrece
 
 - Perfil de máxima calidad: DiT Ref2VA/FL2VA podado en BF16, acondicionador Qwen3-VL NVFP4-AWQ alineado, VAE de vídeo FP16, VAE de audio FP32 y 25 pasos del modelo completo.
@@ -105,7 +118,7 @@ Genere y valide los flujos estáticos y ejecute las pruebas web sin enviar un re
 ```bash
 ./scripts/prepare_workflows.py
 ./scripts/validate_workflows.py
-.venv/bin/python -m pytest -q webapp/tests
+.venv/bin/python -m unittest discover -s webapp/tests -v
 ./scripts/verify_models.sh
 ```
 
