@@ -51,7 +51,7 @@ For each non-final shot, H3 Studio retains an accurately trimmed continuity vide
 - **Pause after this shot** lets the current expensive generation finish and save before stopping the series.
 - A queued, running, pausing, stitching, or failed project survives browser and webapp restarts in the private SQLite registry.
 - **Regenerate from here** creates new attempts for the selected shot and its dependent successors. Old attempts and artifacts are marked superseded but never deleted.
-- A valid generated MP4 whose validation, tail upload, or other post-processing failed can resume post-processing without another H3 render.
+- A validated generated MP4 whose continuity-tail upload or later post-processing failed can resume post-processing without another H3 render.
 - **Retry stitching — no shots regenerate** rebuilds only the final MP4 and manifest from accepted shots.
 - A cancel request affects only the currently owned series job. If the engine completed at the cancellation boundary, the finished MP4 is preserved and exposed instead of being hidden as cancelled.
 
@@ -59,7 +59,7 @@ For each non-final shot, H3 Studio retains an accurately trimmed continuity vide
 
 Accepted shot MP4s are revalidated and re-hashed immediately before final assembly. Identical series settings allow FFmpeg's concat demuxer to stream-copy video and audio without another lossy encode. The stitched movie is then fully decoded and checked against the exact sum of accepted shot frames. A versioned JSON manifest records each accepted attempt, source hash, final hash, media properties, and lossless-concat status.
 
-The browser receives opaque upload handles and allowlisted artifact URLs, never local filesystem paths. Durable project state and derived artifacts live below `runtime/private/`; original H3 renders stay in `ComfyUI/output/`. Neither location is committed to Git.
+Upload and artifact API records expose opaque handles and allowlisted URLs, never those files' local filesystem paths. The setup panel intentionally shows this workstation's local engine start command. Durable project state and derived artifacts live below `runtime/private/`; original H3 renders stay in `ComfyUI/output/`. Neither location is committed to Git.
 
 ## Local API outline
 
