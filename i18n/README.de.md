@@ -31,9 +31,9 @@ In H3 Studio lässt sich direkt zwischen **Single Clip** und **Series** wechseln
 ![H3-Studio-Regieansicht für Videoserien im hellen Design](../docs/images/h3-studio-series-light.png)
 
 - Gemeinsame Figuren-, Welt-, Stimm- und Bewegungsreferenzen werden einmal hochgeladen; anschließend lassen sich 2–12 Shot-Karten mit eigenem Prompt, eigener Dauer und eigenem Seed anordnen.
-- Eine gemeinsame Zulassungssperre hält alle H3-Renderings strikt sequenziell. Nach vollständiger Video-/Audio-Prüfung eines nicht letzten Shots dienen dessen exaktes Schlussbild und letzte drei Sekunden als Kontinuitätsreferenzen für den nächsten Shot.
+- Eine gemeinsame Zulassungssperre hält alle H3-Renderings strikt sequenziell. Bei aktivierter Kontinuität liefert jeder validierte, nicht letzte Shot sein exaktes Schlussbild und den eingestellten 2–4-Sekunden-Nachlauf (standardmäßig 3 Sekunden) an den nächsten Shot.
 - Nach dem aktuellen Shot pausieren, nach einem Neustart fortsetzen, einen Shot samt Folgeshots wiederholen oder Nachbearbeitung und Endmontage erneut ausführen – ohne GPU-Zeit für bereits gültige MP4-Dateien zu verbrauchen.
-- Jeder Render-Versuch bleibt erhalten. Der fertige Film wird erst nach Prüfung von Bildzahl, 24 fps, Stereo-Audio, vollständigem Decode und SHA-256 verlustfrei per Stream-Copy zusammengesetzt; ein Prüfmanifest bleibt daneben erhalten.
+- Jeder Render-Versuch bleibt erhalten. Der fertige Film wird erst nach Prüfung der erwarteten Bildzahl, gemeldeter durchschnittlicher 24 fps, der Stereo-Audio-Ausrichtung innerhalb der AAC-Toleranz, vollständigem Decode und SHA-256 verlustfrei per Stream-Copy zusammengesetzt; ein Prüfmanifest bleibt daneben erhalten.
 
 Der Ablauf übernimmt die klare Storyboard-Idee von Xiaoyunque, doch Generierung und Projektzustand bleiben per Loopback vollständig auf dieser Workstation. Xiaoyunque oder ein kostenpflichtiger Cloud-Generator wird nicht aufgerufen.
 

@@ -31,9 +31,9 @@ H3 Studio permet de passer de **Single Clip** à **Series** sans changer d'espac
 ![Tableau de réalisation de séries vidéo dans le thème clair de H3 Studio](../docs/images/h3-studio-series-light.png)
 
 - Importez une seule fois les références communes de personnages, univers, voix et mouvement, puis organisez de 2 à 12 cartes de plan modifiables avec leur propre prompt, durée et graine.
-- Une porte d'admission unique maintient tous les rendus H3 strictement séquentiels. Après validation complète de la vidéo et de l'audio d'un plan non final, son image finale exacte et ses trois dernières secondes deviennent les références de continuité du plan suivant.
+- Une porte d'admission unique maintient tous les rendus H3 strictement séquentiels. Lorsque la continuité est activée, chaque plan non final validé fournit au suivant son image finale exacte et une fin configurée de 2 à 4 secondes (3 secondes par défaut).
 - Mettez en pause après le plan courant, reprenez après un redémarrage, régénérez un plan et sa suite, ou relancez le post-traitement et l'assemblage final sans dépenser de GPU pour un MP4 déjà valide.
-- Chaque tentative est conservée. Le film final n'est assemblé par copie de flux sans perte qu'après contrôle du nombre d'images, des 24 fps, de l'audio stéréo, du décodage intégral et du SHA-256 ; un manifeste de validation est également gardé.
+- Chaque tentative est conservée. Le film final n'est assemblé par copie de flux sans perte qu'après contrôle du nombre d'images attendu, de la moyenne déclarée de 24 fps, de l'alignement audio stéréo dans la tolérance AAC, du décodage intégral et du SHA-256 ; un manifeste de validation est également gardé.
 
 Le parcours reprend la clarté du storyboard de Xiaoyunque, mais la génération et l'état du projet restent entièrement sur cette station via loopback. Aucun appel n'est envoyé à Xiaoyunque ni à un service cloud payant.
 

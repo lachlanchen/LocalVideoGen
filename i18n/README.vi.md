@@ -31,9 +31,9 @@ Bạn có thể chuyển giữa **Single Clip** và **Series** ngay trong H3 Stu
 ![Bảng đạo diễn series video với giao diện sáng của H3 Studio](../docs/images/h3-studio-series-light.png)
 
 - Chỉ tải lên một lần các tham chiếu chung về nhân vật, thế giới, giọng nói và chuyển động, sau đó sắp xếp 2–12 thẻ cảnh có thể chỉnh sửa với prompt, thời lượng và seed riêng.
-- Một cổng tiếp nhận dùng chung giữ mọi lượt render H3 hoàn toàn tuần tự. Sau khi một cảnh chưa phải cuối vượt qua kiểm tra đầy đủ video/âm thanh, khung hình cuối chính xác và ba giây cuối của cảnh đó trở thành tham chiếu liên tục cho cảnh kế tiếp.
+- Một cổng tiếp nhận dùng chung giữ mọi lượt render H3 hoàn toàn tuần tự. Khi bật tính liên tục, mỗi cảnh chưa phải cuối đã được xác thực sẽ chuyển khung hình cuối chính xác và đoạn đuôi 2–4 giây đã chọn (mặc định 3 giây) cho cảnh kế tiếp.
 - Tạm dừng sau cảnh hiện tại, tiếp tục sau khi khởi động lại, tạo lại một cảnh và các cảnh sau, hoặc thử lại hậu kỳ/ghép cuối mà không tốn GPU cho MP4 đã hợp lệ.
-- Mọi lần render đều được giữ lại. Phim cuối chỉ được ghép bằng sao chép luồng không suy hao sau khi kiểm tra số khung hình, 24 fps, âm thanh stereo, giải mã toàn bộ và SHA-256; tệp manifest xác thực cũng được lưu.
+- Mọi lần render đều được giữ lại. Phim cuối chỉ được ghép bằng sao chép luồng không suy hao sau khi kiểm tra số khung hình dự kiến, tốc độ trung bình 24 fps được báo cáo, căn chỉnh âm thanh stereo trong dung sai AAC, giải mã toàn bộ và SHA-256; tệp manifest xác thực cũng được lưu.
 
 Quy trình lấy cảm hứng từ sự rõ ràng của storyboard Xiaoyunque, nhưng toàn bộ việc tạo video và trạng thái dự án vẫn ở trên máy trạm này qua loopback. Không gọi Xiaoyunque hay dịch vụ tạo nội dung đám mây trả phí nào.
 

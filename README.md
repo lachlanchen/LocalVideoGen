@@ -31,9 +31,9 @@ Switch between **Single Clip** and **Series** without leaving H3 Studio. Series 
 ![H3 Studio light-theme video-series director board](docs/images/h3-studio-series-light.png)
 
 - Upload shared cast, world, voice, and motion references once, then arrange 2–12 editable shot cards with individual prompts, durations, and seeds.
-- A single admission gate keeps every H3 render strictly sequential. After each non-final shot passes full video/audio validation, its exact final frame and final three seconds become the next shot's continuity references.
+- A single admission gate keeps every H3 render strictly sequential. When continuity is enabled, each validated non-final shot supplies its exact final frame and configured 2–4-second tail (3 seconds by default) to the next shot.
 - Pause after the current shot, resume after a restart, retry one shot or everything that follows, and retry post-processing or final stitching without spending GPU time on an already valid MP4.
-- Every render attempt remains preserved. The final movie is assembled by lossless stream copy only after frame-count, 24 fps, stereo-audio, full-decode, and SHA-256 checks; a validation manifest is retained beside it.
+- Every render attempt remains preserved. The final movie is assembled by lossless stream copy only after checks for the expected frame count, reported average 24 fps, stereo-audio alignment within AAC tolerance, full decode, and SHA-256; a validation manifest is retained beside it.
 
 The workflow is inspired by the clarity of Xiaoyunque's storyboard experience, but all generation and project state stay on this workstation over loopback. It does not call Xiaoyunque or any paid cloud generation service.
 

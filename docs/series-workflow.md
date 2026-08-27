@@ -35,22 +35,22 @@ One additional picture slot is reserved for the preceding shot's exact final fra
 ```mermaid
 flowchart LR
     S1[Render Shot 1] --> V1[Full video + audio validation]
-    V1 --> H1[Retain MP4, SHA-256, exact final frame, 3 s tail]
-    H1 --> S2[Render Shot 2 with shared refs + handoff]
+    V1 --> H1[Retain MP4 + SHA-256; if enabled, final frame + 2–4 s tail]
+    H1 --> S2[Render Shot 2 with shared refs + optional handoff]
     S2 --> V2[Validate and retain]
     V2 --> SN[Continue one shot at a time]
     SN --> F[Revalidate sources + lossless concat + manifest]
 ```
 
-Only one render may pass the shared submission gate. The next shot is not submitted until the previous MP4 has the expected canvas and frame count, constant 24 fps video, 32 kHz stereo audio covering the full picture timeline, a successful full decode, and a recorded SHA-256 digest.
+Only one render may pass the shared submission gate. The next shot is not submitted until the previous MP4 has the expected canvas and exact frame count, a reported average frame rate within 0.01 fps of 24, timeline-aligned 32 kHz stereo audio within AAC tolerances, a successful full decode, and a recorded SHA-256 digest.
 
-For each non-final shot, H3 Studio retains an accurately trimmed continuity video and exact final frame, uploads those derived files to the same local ComfyUI input area, and appends deterministic continuity instructions to the next authored prompt. The final shot does not create an unused handoff.
+When continuity is enabled, H3 Studio retains an accurately trimmed 2-, 3-, or 4-second continuity video and exact final frame for each non-final shot, uploads those derived files to the same local ComfyUI input area, and appends deterministic continuity instructions to the next authored prompt. Three seconds is the default. The final shot does not create an unused handoff.
 
 ## Pause, recover, and retry
 
 - **Pause after this shot** lets the current expensive generation finish and save before stopping the series.
 - A queued, running, pausing, stitching, or failed project survives browser and webapp restarts in the private SQLite registry.
-- **Regenerate from here** creates new attempts for the selected shot and its dependent successors. Old attempts and artifacts are marked superseded but never deleted.
+- **Regenerate from here** creates new attempts for the selected shot and its dependent successors. Nothing is deleted; affected accepted attempts and their dependent shot/final artifacts are marked superseded, while other retained attempts and continuity artifacts remain available as history.
 - A validated generated MP4 whose continuity-tail upload or later post-processing failed can resume post-processing without another H3 render.
 - **Retry stitching — no shots regenerate** rebuilds only the final MP4 and manifest from accepted shots.
 - A cancel request affects only the currently owned series job. If the engine completed at the cancellation boundary, the finished MP4 is preserved and exposed instead of being hidden as cancelled.
