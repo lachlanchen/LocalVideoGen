@@ -1,0 +1,17 @@
+ComfyUI 5653b4ac8eca01e64df7d8b5a2ee22385f14dabf
+workflow_templates 963e3f6fb77ec1031357624227ac80ff86c69234
+Python 3.12.13
+torch 2.13.0+cu130
+torchvision 0.28.0+cu130
+torchaudio 2.11.0+cu130
+Triton 3.7.1
+CUDA runtime package (nvidia-cuda-runtime) 13.0.96
+cuDNN package (nvidia-cudnn-cu13) 9.20.0.48
+comfy-kitchen 0.2.31
+comfy-aimdo 0.4.15
+safetensors 0.8.0
+numpy 2.5.2
+ComfyUI frontend package 1.51.9
+NVIDIA driver 595.84
+aria2 1.37.0
+FFmpeg 6.1.1-3ubuntu5

@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use LocalVideoGen, please cite this repository."
+type: software
+title: "LocalVideoGen: Resource-Aware Local MiniMax H3 Video Generation"
+version: 0.1.0
+date-released: 2026-08-28
+abstract: "A reproducible, resource-aware local MiniMax H3 video-and-audio generation stack for a dual-RTX 4090 workstation."
+authors:
+  - family-names: Chen
+    given-names: Lachlan
+    alias: lachlanchen
+repository-code: "https://github.com/lachlanchen/LocalVideoGen"
+url: "https://lazying.art"
+license: MIT
+keywords:
+  - video generation
+  - MiniMax H3
+  - ComfyUI
+  - multi-GPU
+  - local AI
+  - open source

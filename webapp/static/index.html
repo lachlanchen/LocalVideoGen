@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" id="themeColor" content="#0b0d11">
+    <meta name="description" content="A private local studio for MiniMax H3 video generation on this workstation.">
+    <title>H3 Studio · Local Video Generator</title>
+    <script src="/static/theme-init.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#studio">Skip to generation controls</a>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="H3 Studio home">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span>
+          <strong>H3 Studio</strong>
+          <small>Local omni-video workspace</small>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <label class="theme-control" for="themeSelect" title="Choose the studio color theme">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.36-6.36-1.42 1.42M7.06 16.94l-1.42 1.42m12.72 0-1.42-1.42M7.06 7.06 5.64 5.64M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg>
+          <span>Theme</span>
+          <select id="themeSelect" aria-label="Color theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <span class="sr-only" id="themeStatus" aria-live="polite"></span>
+        <button class="status-pill" id="engineStatus" type="button" aria-describedby="engineStatusDetail">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Checking engine</span>
+        </button>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh engine and job status" title="Refresh status">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6.1 6.1L4 8m2 7a7 7 0 0 0 11.9 2.9L20 16"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="composer panel" id="studio" aria-labelledby="studioTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Create</p>
+            <h1 id="studioTitle">Direct the whole scene.</h1>
+          </div>
+          <span class="model-chip">H3 · native stereo</span>
+        </div>
+
+        <form id="renderForm" novalidate>
+          <fieldset class="mode-fieldset">
+            <legend class="sr-only">Generation mode</legend>
+            <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="Generation mode"></div>
+            <p class="field-hint" id="modeDescription"></p>
+          </fieldset>
+
+          <div class="field-group prompt-group">
+            <div class="label-row">
+              <label for="prompt">Scene and sound direction</label>
+              <span id="promptCount">0 / 12,000</span>
+            </div>
+            <textarea id="prompt" name="prompt" rows="8" maxlength="12000" required spellcheck="true" placeholder="Describe subject, action, camera, lighting, timing, dialogue, ambience, sound effects, and music…"></textarea>
+            <div class="prompt-tools">
+              <button class="text-button" id="promptRecipe" type="button">Use a shot recipe</button>
+              <button class="text-button" id="clearPrompt" type="button">Clear</button>
+            </div>
+          </div>
+
+          <section class="asset-section" id="i2vAssets" hidden aria-labelledby="keyframeTitle">
+            <div class="section-label">
+              <div>
+                <h2 id="keyframeTitle">Keyframes</h2>
+                <p>The first frame anchors geometry; an optional last frame guides the ending.</p>
+              </div>
+              <button class="text-button" id="clearKeyframes" type="button">Clear keyframes</button>
+            </div>
+            <div class="drop-grid">
+              <label class="drop-zone" data-slot="first_frame">
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/bmp" data-upload="image" data-single="first_frame">
+                <span class="drop-icon" aria-hidden="true">01</span>
+                <strong>First frame</strong>
+                <small>Required · PNG, JPEG, WebP or BMP</small>
+                <span class="asset-name" aria-live="polite"></span>
+              </label>
+              <label class="drop-zone" data-slot="last_frame">
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/bmp" data-upload="image" data-single="last_frame">
+                <span class="drop-icon" aria-hidden="true">02</span>
+                <strong>Last frame</strong>
+                <small>Optional · cover-cropped to the canvas</small>
+                <span class="asset-name" aria-live="polite"></span>
+              </label>
+            </div>
+          </section>
+
+          <section class="asset-section" id="r2vAssets" hidden aria-labelledby="referenceTitle">
+            <div class="section-label">
+              <div>
+                <h2 id="referenceTitle">References</h2>
+                <p>Guide identity, visual language, movement, or voice with mixed media.</p>
+              </div>
+              <button class="text-button" id="clearReferences" type="button">Clear list</button>
+            </div>
+            <div class="reference-upload-grid">
+              <label class="compact-drop">
+                <input type="file" multiple accept="image/png,image/jpeg,image/webp,image/bmp" data-upload="image" data-list="ref_images">
+                <span aria-hidden="true">＋</span>
+                <strong>Pictures</strong><small>Up to 9</small>
+              </label>
+              <label class="compact-drop">
+                <input type="file" multiple accept="video/mp4,video/quicktime,video/webm,video/x-matroska" data-upload="video" data-list="ref_videos">
+                <span aria-hidden="true">＋</span>
+                <strong>Videos</strong><small>Up to 3 · normalized to 24 fps</small>
+              </label>
+              <label class="compact-drop">
+                <input type="file" multiple accept="audio/*,.flac,.m4a,.opus" data-upload="audio" data-list="ref_audios">
+                <span aria-hidden="true">＋</span>
+                <strong>Audio</strong><small>Up to 3</small>
+              </label>
+            </div>
+            <div class="asset-list" id="referenceList" aria-live="polite"></div>
+            <div class="tag-map" id="tagMap" hidden>
+              <div>
+                <strong>Prompt reference map</strong>
+                <p>Click a tag to insert it at the cursor.</p>
+              </div>
+              <div class="tag-chips" id="tagChips"></div>
+            </div>
+          </section>
+
+          <div class="settings-grid">
+            <div class="field-group span-2">
+              <label for="profile">Quality profile</label>
+              <select id="profile" name="profile"></select>
+              <p class="field-hint" id="profileDescription"></p>
+            </div>
+
+            <div class="field-group span-2">
+              <label for="resolution">Canvas</label>
+              <select id="resolution" name="resolution"></select>
+              <div class="dimension-row" id="customDimensions" hidden>
+                <label>Width <input id="width" name="width" type="number" min="256" max="1344" step="32" inputmode="numeric"></label>
+                <span aria-hidden="true">×</span>
+                <label>Height <input id="height" name="height" type="number" min="256" max="1344" step="32" inputmode="numeric"></label>
+              </div>
+            </div>
+
+            <div class="field-group span-2">
+              <div class="label-row">
+                <label for="duration">Requested duration</label>
+                <output for="duration" id="durationLabel">5.0 s</output>
+              </div>
+              <input id="duration" name="duration" type="range" min="5" max="15" step="0.5" value="5">
+              <p class="field-hint"><span id="frameCount">124 frames</span> · <span id="actualDuration">actual 5.17 s</span> at 24 fps</p>
+            </div>
+
+            <div class="field-group">
+              <label for="seed">Seed</label>
+              <div class="inline-control">
+                <input id="seed" name="seed" type="text" inputmode="numeric" value="1" pattern="[0-9]+" aria-describedby="seedHint">
+                <button class="icon-button subtle" id="randomSeed" type="button" aria-label="Choose a random seed" title="Random seed">↻</button>
+              </div>
+              <p class="field-hint" id="seedHint">Reuse a seed to revisit motion.</p>
+            </div>
+
+            <div class="field-group" id="identityField" hidden>
+              <label for="refImageSize">Reference fidelity</label>
+              <select id="refImageSize" name="ref_image_size">
+                <option value="match">Match canvas · faster</option>
+                <option value="max">Maximum identity · heavier</option>
+              </select>
+              <p class="field-hint">Maximum keeps larger identity tokens through every step.</p>
+            </div>
+          </div>
+
+          <div class="engine-callout" id="engineCallout" hidden>
+            <div>
+              <strong id="engineCalloutTitle">Generation engine is offline</strong>
+              <p id="engineStatusDetail">The web studio never starts a duplicate runtime. Run the verified command once.</p>
+            </div>
+            <div class="command-row">
+              <code id="engineCommand"></code>
+              <button class="copy-button" id="copyCommand" type="button">Copy</button>
+            </div>
+          </div>
+
+          <div class="form-status" id="formStatus" role="status" aria-live="polite"></div>
+          <button class="primary-button" id="renderButton" type="submit" disabled>
+            <span>Create H3 video</span>
+            <small>BF16 · 25 steps · dual stage</small>
+          </button>
+        </form>
+      </section>
+
+      <section class="workspace" aria-label="Generation output and history">
+        <article class="viewer panel" aria-labelledby="viewerTitle">
+          <div class="viewer-heading">
+            <div>
+              <p class="eyebrow">Output</p>
+              <h2 id="viewerTitle">Your latest render</h2>
+            </div>
+            <div class="viewer-actions" id="viewerActions" hidden>
+              <a class="secondary-button" id="downloadOutput" href="#" download>Download MP4</a>
+            </div>
+          </div>
+
+          <div class="media-stage" id="mediaStage">
+            <video id="outputVideo" controls playsinline preload="metadata" hidden></video>
+            <div class="empty-stage" id="emptyStage">
+              <div class="stage-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+              <strong>Picture, movement, and sound—one pass.</strong>
+              <p>Your finished H3 video will appear here with native stereo audio.</p>
+            </div>
+            <div class="render-progress" id="renderProgress" hidden role="status" aria-live="polite">
+              <div class="progress-visual" aria-hidden="true"><span></span></div>
+              <strong id="progressTitle">Queued</strong>
+              <p id="progressDetail">Waiting for the engine.</p>
+              <div class="progress-track"><span id="progressBar"></span></div>
+              <div class="progress-meta"><span id="progressPercent">—</span><span id="progressTime">H3 generation can take a while.</span></div>
+              <button class="text-button danger" id="cancelRender" type="button">Cancel render</button>
+            </div>
+          </div>
+          <div class="output-meta" id="outputMeta" hidden></div>
+        </article>
+
+        <article class="system-strip panel" aria-labelledby="systemTitle">
+          <div class="section-label compact">
+            <div>
+              <p class="eyebrow">Workstation</p>
+              <h2 id="systemTitle">Runtime readiness</h2>
+            </div>
+            <span id="lastChecked">Not checked</span>
+          </div>
+          <div class="metric-grid" id="metricGrid">
+            <div class="metric"><span>Engine</span><strong id="metricEngine">Checking</strong><small id="metricEngineNote">127.0.0.1:8188</small></div>
+            <div class="metric"><span>GPU stages</span><strong id="metricGpu">—</strong><small id="metricGpuNote">DiT · encoder/VAE</small></div>
+            <div class="metric"><span>Models</span><strong id="metricModels">Checking</strong><small id="metricModelsNote">Aligned H3 bundle</small></div>
+          </div>
+        </article>
+
+        <article class="history panel" aria-labelledby="historyTitle">
+          <div class="section-label compact">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h2 id="historyTitle">Renders</h2>
+            </div>
+            <button class="text-button" id="refreshJobs" type="button">Refresh</button>
+          </div>
+          <div class="job-list" id="jobList" aria-live="polite">
+            <p class="empty-list">No H3 renders yet.</p>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <p><strong>Private by design.</strong> Bound to loopback, connected only to this project’s ComfyUI runtime.</p>
+      <p>Aligned MiniMax H3 · local 768-short-edge output · 24 fps · native stereo audio</p>
+    </footer>
+
+    <template id="assetTemplate">
+      <article class="asset-card">
+        <div class="asset-kind" aria-hidden="true"></div>
+        <div class="asset-copy"><strong></strong><small></small></div>
+        <button class="remove-asset" type="button" aria-label="Remove upload">×</button>
+      </article>
+    </template>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+.venv/
+.downloads/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Private runtime state, uploads, logs, job history, and verification receipts.
+runtime/
+
+# Upstream working copies are installed locally and are not vendored here.
+ComfyUI/
+workflow_templates/
+disabled_custom_nodes/
+
+# Never publish model weights, resumable downloads, or local databases.
+*.safetensors
+*.ckpt
+*.gguf
+*.pt
+*.pth
+*.aria2
+*.sqlite3
+*.db
+
+# Local secrets and generated diagnostics.
+.env
+.env.*
+*.log
