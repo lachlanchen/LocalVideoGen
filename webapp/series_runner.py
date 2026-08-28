@@ -43,6 +43,17 @@ LALACHAN_REFERENCE_LABELS = (
     "Aya Chan",
     "Sasa Kun",
 )
+WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS = frozenset(
+    {
+        "Zhuangzi Robot",
+        "Rara Xia",
+        "Aya Chan",
+        "Sasa Kun",
+    }
+)
+REFERENCE_POLICY_STATES = frozenset(
+    {"ready", "paused", "failed", "cancelled", "completed"}
+)
 LOGGER = logging.getLogger("h3-webapp.series")
 REFERENCE_TAG_PATTERN = re.compile(r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE)
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -170,16 +181,121 @@ def _continuity_for_successor(
     return validated
 
 
+def _validated_image_omissions(
+    value: Any,
+    references: Mapping[str, Any],
+    *,
+    template: str,
+    shot_index: int,
+) -> list[str]:
+    """Return a canonical per-shot shared-image omission policy."""
+
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise RequestError("omit_shared_image_labels must be a list")
+    if len(value) > len(references["images"]):
+        raise RequestError("omit_shared_image_labels contains too many labels")
+    requested = [
+        _text(item, "omitted shared image label", maximum=80) for item in value
+    ]
+    if len(set(requested)) != len(requested):
+        raise RequestError("omit_shared_image_labels must not contain duplicates")
+    shared_labels = [str(item["label"]) for item in references["images"]]
+    unknown = [label for label in requested if label not in shared_labels]
+    if unknown:
+        raise RequestError(
+            "omit_shared_image_labels contains an unknown shared image: " + unknown[0]
+        )
+    if shot_index == 0 and requested:
+        raise RequestError("Shot 1 must keep every shared image reference")
+    if template == "world_travel":
+        protected = WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS.intersection(requested)
+        if protected:
+            raise RequestError(
+                "world_travel cannot omit persistent cast reference: "
+                + sorted(protected)[0]
+            )
+    requested_set = set(requested)
+    return [label for label in shared_labels if label in requested_set]
+
+
+def _selected_shared_images(
+    references: Mapping[str, Any], omitted_labels: Sequence[str]
+) -> list[Mapping[str, Any]]:
+    omitted = set(omitted_labels)
+    return [
+        item for item in references["images"] if str(item["label"]) not in omitted
+    ]
+
+
+def _picture_reference_layout(
+    references: Mapping[str, Any],
+    *,
+    omitted_labels: Sequence[str],
+    scene_reference: Mapping[str, Any] | None,
+    include_continuity: bool,
+) -> tuple[list[str], dict[int, int]]:
+    """Build physical picture labels and logical-to-physical tag mapping."""
+
+    omitted = set(omitted_labels)
+    labels: list[str] = []
+    tag_map: dict[int, int] = {}
+    physical_slot = 0
+    shared_images = references["images"]
+    for logical_slot, item in enumerate(shared_images, start=1):
+        if str(item["label"]) in omitted:
+            continue
+        physical_slot += 1
+        tag_map[logical_slot] = physical_slot
+        labels.append(f"<Picture {physical_slot}> = {item['label']}")
+    next_logical_slot = len(shared_images) + 1
+    if scene_reference is not None:
+        physical_slot += 1
+        tag_map[next_logical_slot] = physical_slot
+        labels.append(
+            f"<Picture {physical_slot}> = {scene_reference['label']}"
+        )
+        next_logical_slot += 1
+    if include_continuity:
+        physical_slot += 1
+        tag_map[next_logical_slot] = physical_slot
+        labels.append(
+            f"<Picture {physical_slot}> = previous shot's exact final frame"
+        )
+    return labels, tag_map
+
+
+def _remap_picture_tags(value: str, tag_map: Mapping[int, int]) -> str:
+    """Translate stable authored picture tags to compact physical H3 slots."""
+
+    def replace(match: re.Match[str]) -> str:
+        if match.group(1).lower() != "picture":
+            return match.group(0)
+        physical_slot = tag_map.get(int(match.group(2)))
+        return (
+            f"<Picture {physical_slot}>"
+            if physical_slot is not None
+            else match.group(0)
+        )
+
+    return REFERENCE_TAG_PATTERN.sub(replace, value)
+
+
 def _series_reference_labels(
     references: Mapping[str, Any],
     *,
+    omitted_image_labels: Sequence[str] = (),
     scene_reference: Mapping[str, Any] | None = None,
     continuity_seconds: int,
     include_continuity: bool,
 ) -> list[str]:
-    image_labels = [str(item["label"]) for item in references["images"]]
-    if scene_reference is not None:
-        image_labels.append(str(scene_reference["label"]))
+    labels, _ = _picture_reference_layout(
+        references,
+        omitted_labels=omitted_image_labels,
+        scene_reference=scene_reference,
+        include_continuity=include_continuity and bool(continuity_seconds),
+    )
     video_labels: list[tuple[str, str | None]] = []
     for item in references["videos"]:
         soundtrack = item.get("soundtrack")
@@ -191,17 +307,12 @@ def _series_reference_labels(
             audio_label = None
         video_labels.append((str(item["label"]), audio_label))
     if include_continuity and continuity_seconds:
-        image_labels.append("previous shot's exact final frame")
         video_labels.append(
             (
                 f"previous shot's final {continuity_seconds} seconds",
                 "stereo audio from the previous shot continuity tail",
             )
         )
-    labels = [
-        f"<Picture {index + 1}> = {label}"
-        for index, label in enumerate(image_labels)
-    ]
     audio_index = 1
     for index, (video_label, audio_label) in enumerate(video_labels):
         if audio_label is not None:
@@ -225,12 +336,23 @@ def _compose_series_prompt(
             "screen direction; do not add, merge, duplicate or replace cast members."
         )
     elif document["template"] == "world_travel":
+        if shot.get("omit_shared_image_labels"):
+            picture_guidance = (
+                "Shared pictures present in the reference map are identity and series-style anchors "
+                "only. The shot-specific location picture named in the reference map controls the "
+                "location, architecture, terrain, light and atmosphere for this shot only; "
+            )
+        else:
+            picture_guidance = (
+                "Pictures 1-7 are shared identity and series-style anchors only. Picture 8 is the "
+                "location, architecture, terrain, light and atmosphere anchor for this shot only; "
+            )
         guidance = (
             "LALACHAN World Travel continuity: lock every named character's identity, species, human "
             "face, body scale, wardrobe, accessories, relationships and voice across the whole journey. "
             "Keep the stated travel route, geography, screen direction, time progression and carried "
-            "props coherent. Pictures 1-7 are shared identity and series-style anchors only. Picture 8 "
-            "is the location, architecture, terrain, light and atmosphere anchor for this shot only; "
+            "props coherent. "
+            f"{picture_guidance}"
             "do not carry its place-specific details into another destination. Any earlier-episode, "
             "video or audio reference may guide character appearance or voice timbre only: never copy "
             "its country, plot, story direction, actions, blocking, landmarks or visual composition. "
@@ -249,9 +371,25 @@ def _compose_series_prompt(
             "do not replay its completed action."
         )
     reference_map = "\nReference map:\n" + "\n".join(labels) if labels else ""
+    _, picture_tag_map = _picture_reference_layout(
+        document["references"],
+        omitted_labels=shot.get("omit_shared_image_labels") or [],
+        scene_reference=(
+            shot.get("scene_reference")
+            if isinstance(shot.get("scene_reference"), Mapping)
+            else None
+        ),
+        include_continuity=(
+            shot_index > 0 and bool(document["settings"]["continuity_seconds"])
+        ),
+    )
+    remapped_brief = _remap_picture_tags(
+        str(document.get("brief") or ""), picture_tag_map
+    )
+    remapped_prompt = _remap_picture_tags(str(shot["prompt"]), picture_tag_map)
     brief = (
-        f"\nSilent series context, never speak or display: {document['brief']}"
-        if document.get("brief")
+        f"\nSilent series context, never speak or display: {remapped_brief}"
+        if remapped_brief
         else ""
     )
     settings = document["settings"]
@@ -263,7 +401,7 @@ def _compose_series_prompt(
         "Production rule: never speak or display a series title, shot title, reference label, "
         "production note or instruction. Spoken content is limited to dialogue explicitly quoted "
         "in the authored shot direction.\n"
-        f"{guidance}{continuity}{target}{brief}{reference_map}\n\n{shot['prompt']}"
+        f"{guidance}{continuity}{target}{brief}{reference_map}\n\n{remapped_prompt}"
     )
 
 
@@ -381,6 +519,12 @@ def build_series_document(
             )
         elif scene_raw is not None:
             raise RequestError("scene_reference is only available for world_travel")
+        omitted_shared_images = _validated_image_omissions(
+            item.get("omit_shared_image_labels"),
+            references,
+            template=template,
+            shot_index=index,
+        )
         try:
             duration = float(item.get("duration", 10))
         except (TypeError, ValueError, OverflowError) as exc:
@@ -409,6 +553,7 @@ def build_series_document(
                 "actual_duration": aligned_frame_count(duration) / 24.0,
                 "seed": seed,
                 "scene_reference": scene_reference,
+                "omit_shared_image_labels": omitted_shared_images,
                 "status": "pending",
                 "attempts": [],
                 "accepted_attempt": None,
@@ -450,15 +595,32 @@ def build_series_document(
     for index in range(len(shots)):
         labels = _series_reference_labels(
             references,
+            omitted_image_labels=(
+                shots[index].get("omit_shared_image_labels") or []
+            ),
             scene_reference=shots[index].get("scene_reference"),
             continuity_seconds=continuity_seconds,
             include_continuity=index > 0,
+        )
+        _, picture_tag_map = _picture_reference_layout(
+            references,
+            omitted_labels=shots[index].get("omit_shared_image_labels") or [],
+            scene_reference=(
+                shots[index].get("scene_reference")
+                if isinstance(shots[index].get("scene_reference"), Mapping)
+                else None
+            ),
+            include_continuity=index > 0 and bool(continuity_seconds),
         )
         available_tags = {
             (match.group(1).lower(), int(match.group(2)))
             for label in labels
             if (match := REFERENCE_TAG_PATTERN.search(label))
         }
+        available_tags = {
+            tag for tag in available_tags if tag[0] != "picture"
+        }
+        available_tags.update(("picture", slot) for slot in picture_tag_map)
         audio_semantics: dict[int, str] = {}
         for label in labels:
             match = REFERENCE_TAG_PATTERN.search(label)
@@ -561,6 +723,9 @@ def public_series(record: Mapping[str, Any], client: ComfyClient | None = None) 
             "duration": shot.get("duration"),
             "actual_duration": shot.get("actual_duration"),
             "seed": shot.get("seed"),
+            "omit_shared_image_labels": copy.deepcopy(
+                shot.get("omit_shared_image_labels") or []
+            ),
             "status": shot.get("status"),
             "attempts": attempts,
             "accepted_attempt": shot.get("accepted_attempt"),
@@ -974,10 +1139,13 @@ class SeriesRunner:
         self, document: Mapping[str, Any], shot_index: int
     ) -> tuple[dict[str, Any], str, list[str]]:
         refs = document["references"]
+        shot = document["shots"][shot_index]
+        omitted_image_labels = shot.get("omit_shared_image_labels") or []
         images = [
-            UploadedAsset("image", item["path"], item["name"]) for item in refs["images"]
+            UploadedAsset("image", item["path"], item["name"])
+            for item in _selected_shared_images(refs, omitted_image_labels)
         ]
-        scene_reference = document["shots"][shot_index].get("scene_reference")
+        scene_reference = shot.get("scene_reference")
         if isinstance(scene_reference, Mapping):
             images.append(
                 UploadedAsset(
@@ -1011,6 +1179,7 @@ class SeriesRunner:
             video_audio.append(None)
         labels = _series_reference_labels(
             refs,
+            omitted_image_labels=omitted_image_labels,
             scene_reference=(scene_reference if isinstance(scene_reference, Mapping) else None),
             continuity_seconds=int(document["settings"]["continuity_seconds"]),
             include_continuity=continuity is not None,
@@ -1033,6 +1202,8 @@ class SeriesRunner:
         """Return private reference provenance in exact per-shot media order."""
 
         refs = document["references"]
+        shot = document["shots"][shot_index]
+        omitted_image_labels = shot.get("omit_shared_image_labels") or []
         records: list[dict[str, str]] = []
 
         def append(
@@ -1051,9 +1222,9 @@ class SeriesRunner:
                 }
             )
 
-        for item in refs["images"]:
+        for item in _selected_shared_images(refs, omitted_image_labels):
             append(item, kind="image")
-        scene = document["shots"][shot_index].get("scene_reference")
+        scene = shot.get("scene_reference")
         if isinstance(scene, Mapping):
             append(scene, kind="image")
         for item in refs["videos"]:
@@ -1656,6 +1827,63 @@ class SeriesRunner:
         record = self.store.mutate(series_id, resume_series)
         self.wake()
         return record
+
+    async def set_shot_reference_policy(
+        self,
+        series_id: str,
+        shot_index: int,
+        *,
+        omit_shared_image_labels: Any,
+    ) -> dict[str, Any]:
+        """Change only the references used by a future attempt of one stopped shot."""
+
+        if isinstance(shot_index, bool) or not isinstance(shot_index, int):
+            raise RequestError("shot_index must be an integer")
+
+        def set_policy(document: dict[str, Any], status: str):
+            if status not in REFERENCE_POLICY_STATES:
+                raise RequestError(
+                    "series must be ready, paused, or stopped before reference policy can change"
+                )
+            shots = document["shots"]
+            if not 0 <= shot_index < len(shots):
+                raise RequestError("shot_index is out of range")
+            if isinstance(document.get("active_shot"), int):
+                raise RequestError("cannot change reference policy while a render is active")
+            omissions = _validated_image_omissions(
+                omit_shared_image_labels,
+                document["references"],
+                template=str(document["template"]),
+                shot_index=shot_index,
+            )
+            shot = shots[shot_index]
+            _, picture_tag_map = _picture_reference_layout(
+                document["references"],
+                omitted_labels=omissions,
+                scene_reference=(
+                    shot.get("scene_reference")
+                    if isinstance(shot.get("scene_reference"), Mapping)
+                    else None
+                ),
+                include_continuity=(
+                    shot_index > 0
+                    and bool(document["settings"]["continuity_seconds"])
+                ),
+            )
+            authored = f"{document.get('brief') or ''}\n{shot['prompt']}"
+            for match in REFERENCE_TAG_PATTERN.finditer(authored):
+                if (
+                    match.group(1).lower() == "picture"
+                    and int(match.group(2)) not in picture_tag_map
+                ):
+                    raise RequestError(
+                        f"Shot {shot_index + 1} uses {match.group(0)} but its reference policy omits it"
+                    )
+            shot["omit_shared_image_labels"] = omissions
+            return document, status
+
+        async with self.submission_lock:
+            return self.store.mutate(series_id, set_policy)
 
     async def retry(
         self,

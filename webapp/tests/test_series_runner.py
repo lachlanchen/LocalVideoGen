@@ -357,6 +357,113 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertIn(required, prompt)
 
+    async def test_later_world_travel_shot_omits_opening_props_and_remaps_tags(
+        self,
+    ) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        document, payload, resolve = self.world_document(input_root)
+        payload["shots"][1]["omit_shared_image_labels"] = [
+            "Words card",
+            "LightMind glasses",
+            "Patchwork notebook",
+        ]
+        document = build_series_document(payload, resolve)
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+
+        assets, _, labels = self.runner._references_for_shot(document, 1)
+
+        self.assertEqual(
+            [asset.original_name for asset in assets["ref_images"]],
+            [
+                "reference-2.png",
+                "reference-5.png",
+                "reference-6.png",
+                "reference-7.png",
+                "reference-9.png",
+                "frame.png",
+            ],
+        )
+        self.assertEqual(
+            labels[:6],
+            [
+                "<Picture 1> = Zhuangzi Robot",
+                "<Picture 2> = Rara Xia",
+                "<Picture 3> = Aya Chan",
+                "<Picture 4> = Sasa Kun",
+                "<Picture 5> = Florence · Duomo street view",
+                "<Picture 6> = previous shot's exact final frame",
+            ],
+        )
+        prompt = self.runner._series_prompt(document, 1, labels)
+        self.assertIn("Continue north to <Picture 5>", prompt)
+        self.assertNotIn("<Picture 8>", prompt)
+        for omitted in ("Words card", "LightMind glasses", "Patchwork notebook"):
+            self.assertNotIn(omitted, prompt)
+        self.assertIn("shot-specific location picture", prompt)
+
+    async def test_reference_policy_preserves_attempt_history_and_cast_refs(
+        self,
+    ) -> None:
+        document, _, _ = self.world_document()
+        document["shots"][1]["attempts"] = [
+            {
+                "number": 1,
+                "job_id": str(uuid.uuid4()),
+                "status": "completed",
+                "error": None,
+                "artifact_ids": [str(uuid.uuid4())],
+                "reference_map": ["old preserved map"],
+            }
+        ]
+        attempts_before = copy.deepcopy(document["shots"][1]["attempts"])
+        series_id = str(uuid.uuid4())
+        self.series.create(series_id, document, status="paused")
+
+        updated = await self.runner.set_shot_reference_policy(
+            series_id,
+            1,
+            omit_shared_image_labels=[
+                "Words card",
+                "LightMind glasses",
+                "Patchwork notebook",
+            ],
+        )
+
+        shot = updated["document"]["shots"][1]
+        self.assertEqual(shot["attempts"], attempts_before)
+        self.assertEqual(
+            shot["omit_shared_image_labels"],
+            ["Words card", "LightMind glasses", "Patchwork notebook"],
+        )
+        with self.assertRaisesRegex(RequestError, "persistent cast"):
+            await self.runner.set_shot_reference_policy(
+                series_id,
+                1,
+                omit_shared_image_labels=["Aya Chan"],
+            )
+        with self.assertRaisesRegex(RequestError, "Shot 1 must keep"):
+            await self.runner.set_shot_reference_policy(
+                series_id,
+                0,
+                omit_shared_image_labels=["Words card"],
+            )
+
+    async def test_reference_policy_rejects_omitting_an_authored_picture_tag(
+        self,
+    ) -> None:
+        _, payload, resolve = self.world_document()
+        payload["shots"][1]["prompt"] += " Show <Picture 1>."
+        payload["shots"][1]["omit_shared_image_labels"] = ["Words card"]
+        with self.assertRaisesRegex(RequestError, "without a matching reference"):
+            build_series_document(payload, resolve)
+
     async def test_composed_prompt_keeps_ui_titles_out_of_generation_text(self) -> None:
         document, payload, resolve = self.world_document()
         document["title"] = "SPEAK_THIS_SERIES_TITLE"

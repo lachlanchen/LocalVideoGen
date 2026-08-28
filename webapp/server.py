@@ -35,6 +35,8 @@ from .media import DEFAULT_LIMITS, prepare_upload
 from .series_media import SeriesMedia, SeriesMediaError
 from .series_runner import (
     LALACHAN_REFERENCE_LABELS,
+    REFERENCE_POLICY_STATES,
+    WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS,
     SeriesRunner,
     build_series_document,
     find_artifact,
@@ -740,11 +742,23 @@ def create_app(
             "lalachan_picture_labels": list(LALACHAN_REFERENCE_LABELS),
             "world_travel_scene_reference_per_shot": 1,
             "sequential_only": True,
+            "shot_reference_policy": {
+                "field": "omit_shared_image_labels",
+                "logical_picture_tags_remapped": True,
+                "first_shot_must_keep_all": True,
+                "editable_states": sorted(REFERENCE_POLICY_STATES),
+                "endpoint": "/api/series/{series_id}/shots/{shot_index}/reference-policy",
+            },
             "capabilities": {
                 "world_travel": {
                     "template": "world_travel",
                     "render_mode": "r2v",
                     "maximum_quality_profile": "quality_bf16_dual",
+                    "persistent_shared_image_labels": [
+                        label
+                        for label in LALACHAN_REFERENCE_LABELS
+                        if label in WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS
+                    ],
                     "picture_slots": {
                         "shared": [
                             {"slot": index, "label": label}
@@ -1104,6 +1118,27 @@ def create_app(
         await _require_project_comfy(request)
         record = await request.app[SERIES_RUNNER_KEY].cancel(series_id)
         return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
+
+    @routes.put(
+        "/api/series/{series_id}/shots/{shot_index}/reference-policy"
+    )
+    async def set_shot_reference_policy(request: web.Request) -> web.Response:
+        series_id, _ = series_record(request)
+        try:
+            shot_index = int(request.match_info["shot_index"])
+        except ValueError as exc:
+            raise RequestError("shot_index must be an integer") from exc
+        payload = await series_payload(request)
+        if set(payload) != {"omit_shared_image_labels"}:
+            raise RequestError(
+                "reference policy requires only omit_shared_image_labels"
+            )
+        record = await request.app[SERIES_RUNNER_KEY].set_shot_reference_policy(
+            series_id,
+            shot_index,
+            omit_shared_image_labels=payload["omit_shared_image_labels"],
+        )
+        return web.json_response(public_series(record, request.app[COMFY_KEY]))
 
     async def retry_series_shot(
         request: web.Request, series_id: str, shot_index: int

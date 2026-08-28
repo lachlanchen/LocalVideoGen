@@ -26,6 +26,11 @@ The existing `profiles`, `series.templates`, limits, and defaults remain present
 {
   "series_api_version": 1,
   "series": {
+    "shot_reference_policy": {
+      "field": "omit_shared_image_labels",
+      "logical_picture_tags_remapped": true,
+      "first_shot_must_keep_all": true
+    },
     "capabilities": {
       "world_travel": {
         "template": "world_travel",
@@ -162,6 +167,7 @@ Server limits remain authoritative:
 | shared videos | At most 2, reserving H3’s third video slot for the preceding continuity tail |
 | shared audio | At most 3 |
 | continuity | 0, 2, 3, or 4 seconds; 3 is the quality default |
+| per-shot shared pictures | optional `omit_shared_image_labels`; Shot 1 keeps all shared pictures, and World Travel always keeps Robot plus all three cast pictures |
 | prompt | Authored shot prompt at most 10,000 characters; composed prompt at most 12,000 |
 
 ## World Travel reference contract
@@ -195,6 +201,29 @@ Every shot additionally requires one image:
 
 For that shot, the location image becomes `<Picture 8>`. With continuity enabled, the exact final frame from the previous accepted shot becomes `<Picture 9>`, and its accurate 2–4 second tail occupies the reserved video slot. The scene image controls only that shot’s architecture, terrain, light, atmosphere, and geography. It is not carried into the next destination.
 
+Later shots can keep identity references while removing opening props that otherwise tend to reappear. Add this optional field to an individual shot:
+
+```json
+"omit_shared_image_labels": [
+  "Words card",
+  "LightMind glasses",
+  "Patchwork notebook"
+]
+```
+
+Shot 1 must use all seven canonical pictures. World Travel never permits omitting `Zhuangzi Robot`, `Rara Xia`, `Aya Chan`, or `Sasa Kun`. The policy removes the selected files from that shot's H3 graph and reference provenance; it is not merely a negative-prompt hint. Authored picture tags retain their canonical logical meaning: for the example above, authored `<Picture 8>` is automatically remapped to physical `<Picture 5>` for the scene plate, and logical `<Picture 9>` becomes physical `<Picture 6>` for continuity. An authored tag for an omitted picture is rejected before GPU submission.
+
+A ready, paused, failed, cancelled, or completed series can set the policy for a future attempt without replacing the series or altering any saved attempt:
+
+```bash
+./scripts/localvideogen_series.py set-reference-policy SERIES_ID 4 \
+  --omit-shared-image-label 'Words card' \
+  --omit-shared-image-label 'LightMind glasses' \
+  --omit-shared-image-label 'Patchwork notebook'
+```
+
+The shot index is zero-based. For a pending shot, set the policy while the series is paused and then `resume`. For an already accepted shot, setting the policy changes only a future attempt; explicitly call `retry` afterward if regeneration is desired. Omitting all flags clears the policy. Existing attempt records, output artifacts, hashes, and their historical reference maps remain unchanged.
+
 On restart or retry, a successor shot advertises and submits P9 and the continuity video only when the durable handoff contains both media paths and valid recorded SHA-256 values for both files. A missing final frame, missing tail, absent digest, malformed digest, or unsafe relative location fails the series before a new GPU attempt is claimed. The accepted prior render remains preserved; retry or regenerate that prior shot to rebuild its verified handoff.
 
 Earlier episodes—such as an Iran episode—may be supplied as a shared video or soundtrack for character appearance, motion, and voice timbre. If only voice continuity is needed, demux and upload its audio rather than its video; removing the old episode’s frames is the strongest protection against visual or geographic leakage. World Travel’s server-composed guidance explicitly forbids copying that reference’s country, plot, story direction, action, blocking, landmark, or composition. The current destination’s authored story and per-shot scene reference stay authoritative.
@@ -222,6 +251,7 @@ localvideogen_series.py wait SERIES_ID [--until terminal-or-paused|terminal] [--
 localvideogen_series.py pause SERIES_ID
 localvideogen_series.py resume SERIES_ID
 localvideogen_series.py cancel-active SERIES_ID
+localvideogen_series.py set-reference-policy SERIES_ID ZERO_BASED_SHOT [--omit-shared-image-label LABEL ...]
 localvideogen_series.py retry SERIES_ID ZERO_BASED_SHOT [--regenerate-following]
 localvideogen_series.py retry-finalization SERIES_ID
 localvideogen_series.py artifacts SERIES_ID
@@ -370,7 +400,7 @@ manifest_receipt = client.download_artifact(
 print(final_receipt["sha256"], manifest_receipt["sha256"])
 ```
 
-Useful methods also include `health`, `config`, `preflight_series_spec`, `upload`, `validate_uploads`, `update_series_from_spec`, `recover_from_receipt`, `list_series`, `get_series`, `pause_series`, `resume_series`, `cancel_active`, `retry_shot`, `retry_finalization`, and `list_artifacts`.
+Useful methods also include `health`, `config`, `preflight_series_spec`, `upload`, `validate_uploads`, `update_series_from_spec`, `recover_from_receipt`, `list_series`, `get_series`, `pause_series`, `resume_series`, `cancel_active`, `set_shot_reference_policy`, `retry_shot`, `retry_finalization`, and `list_artifacts`.
 
 ## Raw HTTP and curl contract
 
@@ -425,6 +455,7 @@ The Series endpoints are:
 | `POST` | `/api/series/{id}/pause` | 202 | Preserve the active shot, then pause before the next |
 | `POST` | `/api/series/{id}/resume` | 202 | Requeue a paused series |
 | `POST` | `/api/series/{id}/cancel-active` | 202 | Cancel only this series’ owned active job |
+| `PUT` | `/api/series/{id}/shots/{index}/reference-policy` | 200 | Set one stopped shot's `omit_shared_image_labels` without changing attempt history |
 | `POST` | `/api/series/{id}/shots/{index}/retry` | 202 | Retry a zero-based shot; JSON may set `regenerate_following` |
 | `POST` | `/api/series/{id}/retry-finalization` | 202 | Revalidate and restitch accepted shots without H3 generation |
 | `GET` | `/api/series/{id}/artifacts/{artifact_id}` | 200/206 | Stream one durable allowlisted artifact; `?download=1` adds disposition |
@@ -445,7 +476,7 @@ ready → queued ↔ waiting → running → stitching → completed
 `waiting` means another locally owned H3 job holds the shared gate; it does not mean another renderer will be launched. A detail response includes:
 
 - `settings`, sanitized shared `references`, and ordered `shots`;
-- each World Travel shot’s sanitized `scene_reference` (`kind`, `name`, `label`, never path/token);
+- each World Travel shot’s sanitized `scene_reference` (`kind`, `name`, `label`, never path/token) and `omit_shared_image_labels` policy;
 - `active_shot` and `progress.completed_shots`, `total_shots`, `overall_percent`, and live render progress when available;
 - all preserved attempts, their statuses, reference maps, validation outputs, and superseded markers;
 - top-level active `final_artifact`, final/manifest artifact list, revision, timestamps, and a bounded error string.

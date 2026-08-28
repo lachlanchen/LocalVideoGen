@@ -20,7 +20,7 @@ The LALACHAN and World Travel picture order remains fixed in every shot:
 | `<Picture 6>` | Aya Chan |
 | `<Picture 7>` | Sasa Kun — a human-faced boy in a panda hoodie |
 
-For World Travel, the current shot's required destination plate is `<Picture 8>` and the preceding accepted shot's exact final frame is `<Picture 9>`. The destination plate controls only that shot's architecture, terrain, light, atmosphere, and geography; it does not carry the previous country's story direction forward. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
+For World Travel, the current shot's required destination plate is authored as logical `<Picture 8>` and the preceding accepted shot's exact final frame as logical `<Picture 9>`. Later shots may omit opening-only shared images such as the Words card, LightMind glasses, and Patchwork notebook while the Robot and three cast references remain mandatory. H3 Studio removes omitted files from the graph and provenance, compacts the physical picture slots, and remaps the authored logical tags before submission. The destination plate controls only that shot's architecture, terrain, light, atmosphere, and geography; it does not carry the previous country's story direction forward. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
 
 LALACHAN Series does not require a per-shot destination plate, so its optional exact final-frame handoff uses the next free picture slot after the seven shared anchors. The UI and API capability response expose the effective tags before submission; callers should not hard-code World Travel's P8/P9 layout for another template.
 
@@ -54,6 +54,7 @@ When continuity is enabled, H3 Studio retains an accurately trimmed 2-, 3-, or 4
 - **Pause after this shot** lets the current expensive generation finish and save before stopping the series.
 - A queued, running, pausing, stitching, or failed project survives browser and webapp restarts in the private SQLite registry.
 - **Regenerate from here** creates new attempts for the selected shot and its dependent successors. Nothing is deleted; affected accepted attempts and their dependent shot/final artifacts are marked superseded, while other retained attempts and continuity artifacts remain available as history.
+- A stopped series may change one shot's `omit_shared_image_labels` policy before its next attempt. Existing attempts, artifacts, hashes, and historical reference maps remain unchanged; an already accepted shot still requires an explicit retry before the new policy has any rendering effect.
 - A validated generated MP4 whose continuity-tail upload or later post-processing failed can resume post-processing without another H3 render.
 - **Retry stitching — no shots regenerate** rebuilds only the final MP4 and manifest from accepted shots.
 - A cancel request affects only the currently owned series job. If the engine completed at the cancellation boundary, the finished MP4 is preserved and exposed instead of being hidden as cancelled.
@@ -74,6 +75,7 @@ Upload and artifact API records expose opaque handles and allowlisted URLs, neve
 | Read or replace a ready project | `GET/PUT /api/series/{id}` |
 | Start, pause, or resume | `POST /api/series/{id}/start`, `/pause`, `/resume` |
 | Cancel the owned active shot | `POST /api/series/{id}/cancel-active` |
+| Set opening-only shared-image omissions for a stopped shot | `PUT /api/series/{id}/shots/{index}/reference-policy` |
 | Regenerate a shot and optionally its successors | `POST /api/series/{id}/shots/{index}/retry` |
 | Retry final assembly only | `POST /api/series/{id}/retry-finalization` |
 | Stream an allowlisted artifact | `GET /api/series/{id}/artifacts/{artifact_id}` |

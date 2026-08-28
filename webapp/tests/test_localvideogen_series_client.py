@@ -63,6 +63,11 @@ def maximum_quality_config() -> dict:
         ],
         "series": {
             "templates": ["lalachan", "movie", "world_travel"],
+            "shot_reference_policy": {
+                "field": "omit_shared_image_labels",
+                "logical_picture_tags_remapped": True,
+                "first_shot_must_keep_all": True,
+            },
             "capabilities": {
                 "world_travel": {
                     "template": "world_travel",
@@ -470,6 +475,43 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
             self.assertNotIn("source", json.dumps(payload))
             self.assertNotIn(str(root), json.dumps(payload))
 
+    def test_world_travel_image_omission_is_preflighted_and_preserved(self) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Florence",
+                "prompt": "Continue to <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {
+                    "token": "florence-token",
+                    "label": "Florence",
+                },
+                "omit_shared_image_labels": [
+                    "Words card",
+                    "LightMind glasses",
+                    "Patchwork notebook",
+                ],
+            }
+        )
+        client = PreparationClient()
+        report = client.preflight_series_spec(spec)
+        self.assertEqual(report["template"], "world_travel")
+
+        payload = client.prepare_series_payload(spec)
+        self.assertEqual(
+            payload["shots"][1]["omit_shared_image_labels"],
+            ["Words card", "LightMind glasses", "Patchwork notebook"],
+        )
+
+        old_server = PreparationClient()
+        old_server.config_result["series"].pop("shot_reference_policy")
+        with self.assertRaisesRegex(SeriesClientError, "does not advertise"):
+            old_server.preflight_series_spec(spec)
+        invalid = copy.deepcopy(spec)
+        invalid["shots"][1]["omit_shared_image_labels"] = ["Aya Chan"]
+        with self.assertRaisesRegex(SeriesClientError, "persistent cast"):
+            client.preflight_series_spec(invalid)
+
     def test_video_soundtrack_source_is_uploaded_as_an_audio_handle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -545,6 +587,25 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
         client.retry_finalization(SERIES_ID)
         self.assertEqual(
             client.calls[-1][1], f"/api/series/{SERIES_ID}/retry-finalization"
+        )
+        client.set_shot_reference_policy(
+            SERIES_ID,
+            3,
+            omit_shared_image_labels=["Words card", "Patchwork notebook"],
+        )
+        self.assertEqual(
+            client.calls[-1],
+            (
+                "PUT",
+                f"/api/series/{SERIES_ID}/shots/3/reference-policy",
+                {
+                    "omit_shared_image_labels": [
+                        "Words card",
+                        "Patchwork notebook",
+                    ]
+                },
+                None,
+            ),
         )
 
         client.states = [

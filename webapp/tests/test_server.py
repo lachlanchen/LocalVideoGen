@@ -154,6 +154,10 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             config["series"]["world_travel_scene_reference_per_shot"], 1
         )
+        policy = config["series"]["shot_reference_policy"]
+        self.assertEqual(policy["field"], "omit_shared_image_labels")
+        self.assertTrue(policy["logical_picture_tags_remapped"])
+        self.assertIn("paused", policy["editable_states"])
         capability = config["series"]["capabilities"]["world_travel"]
         self.assertEqual(capability["template"], "world_travel")
         self.assertEqual(capability["render_mode"], "r2v")
@@ -515,6 +519,29 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             private["shots"][1]["scene_reference"]["sha256"],
             r"^[0-9a-f]{64}$",
         )
+
+        policy = await self.client.put(
+            f"/api/series/{body['id']}/shots/1/reference-policy",
+            json={
+                "omit_shared_image_labels": [
+                    "Words card",
+                    "LightMind glasses",
+                    "Patchwork notebook",
+                ]
+            },
+        )
+        self.assertEqual(policy.status, 200, await policy.text())
+        policy_body = await policy.json()
+        self.assertEqual(
+            policy_body["shots"][1]["omit_shared_image_labels"],
+            ["Words card", "LightMind glasses", "Patchwork notebook"],
+        )
+        rejected = await self.client.put(
+            f"/api/series/{body['id']}/shots/1/reference-policy",
+            json={"omit_shared_image_labels": ["Aya Chan"]},
+        )
+        self.assertEqual(rejected.status, 400)
+        self.assertIn("persistent cast", (await rejected.json())["error"])
 
     async def test_invalid_token_shape_and_dual_gpu_gate(self) -> None:
         response = await self.client.post(

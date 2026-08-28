@@ -65,6 +65,9 @@ WORLD_TRAVEL_REFERENCE_LABELS = (
     "Aya Chan",
     "Sasa Kun",
 )
+WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS = frozenset(
+    {"Zhuangzi Robot", "Rara Xia", "Aya Chan", "Sasa Kun"}
+)
 
 
 class SeriesClientError(RuntimeError):
@@ -118,6 +121,57 @@ def normalize_base_url(value: str) -> str:
         raise SeriesClientError("base URL port is invalid")
     host = f"[{parsed.hostname}]" if parsed.hostname == "::1" else parsed.hostname
     return f"http://{host}{f':{port}' if port is not None else ''}"
+
+
+def _validate_spec_image_omissions(spec: Mapping[str, Any]) -> bool:
+    """Validate per-shot label policies before any source upload."""
+
+    references = spec.get("references") or {}
+    raw_images = references.get("images") if isinstance(references, Mapping) else None
+    image_labels = (
+        [
+            item.get("label") if isinstance(item, Mapping) else None
+            for item in raw_images
+        ]
+        if isinstance(raw_images, list)
+        else []
+    )
+    shots = spec.get("shots")
+    if not isinstance(shots, list):
+        return False
+    used = False
+    for index, shot in enumerate(shots):
+        if not isinstance(shot, Mapping) or "omit_shared_image_labels" not in shot:
+            continue
+        raw = shot.get("omit_shared_image_labels")
+        if isinstance(raw, (str, bytes)) or not isinstance(raw, list):
+            raise SeriesClientError("omit_shared_image_labels must be a list")
+        if any(not isinstance(label, str) or not label.strip() for label in raw):
+            raise SeriesClientError(
+                "omit_shared_image_labels must contain non-empty text labels"
+            )
+        labels = [label.strip() for label in raw]
+        if len(set(labels)) != len(labels):
+            raise SeriesClientError(
+                "omit_shared_image_labels must not contain duplicates"
+            )
+        unknown = [label for label in labels if label not in image_labels]
+        if unknown:
+            raise SeriesClientError(
+                "omit_shared_image_labels contains an unknown shared image: "
+                + unknown[0]
+            )
+        if index == 0 and labels:
+            raise SeriesClientError("Shot 1 must keep every shared image reference")
+        if spec.get("template") == "world_travel":
+            protected = WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS.intersection(labels)
+            if protected:
+                raise SeriesClientError(
+                    "world_travel cannot omit persistent cast reference: "
+                    + sorted(protected)[0]
+                )
+        used = used or bool(labels)
+    return used
 
 
 def load_series_spec(path: str | Path) -> tuple[dict[str, Any], Path]:
@@ -519,6 +573,19 @@ class LocalVideoGenClient:
             raise SeriesClientError(
                 f"template {template!r} is not advertised by this server"
             )
+        uses_image_omissions = _validate_spec_image_omissions(spec)
+        if uses_image_omissions:
+            policy = series.get("shot_reference_policy")
+            if not isinstance(policy, Mapping) or any(
+                (
+                    policy.get("field") != "omit_shared_image_labels",
+                    policy.get("logical_picture_tags_remapped") is not True,
+                    policy.get("first_shot_must_keep_all") is not True,
+                )
+            ):
+                raise SeriesClientError(
+                    "server does not advertise safe per-shot shared-image omission"
+                )
 
         if template == "world_travel":
             capabilities = series.get("capabilities")
@@ -1090,6 +1157,43 @@ class LocalVideoGenClient:
     def cancel_active(self, series_id: str) -> dict[str, Any]:
         return self._action(series_id, "cancel-active")
 
+    def set_shot_reference_policy(
+        self,
+        series_id: str,
+        shot_index: int,
+        *,
+        omit_shared_image_labels: Sequence[str],
+    ) -> dict[str, Any]:
+        if (
+            isinstance(shot_index, bool)
+            or not isinstance(shot_index, int)
+            or shot_index < 0
+        ):
+            raise SeriesClientError("shot index must be a non-negative integer")
+        if isinstance(omit_shared_image_labels, (str, bytes)) or not isinstance(
+            omit_shared_image_labels, Sequence
+        ):
+            raise SeriesClientError("omit_shared_image_labels must be a list")
+        labels = list(omit_shared_image_labels)
+        if any(not isinstance(label, str) or not label.strip() for label in labels):
+            raise SeriesClientError(
+                "omit_shared_image_labels must contain non-empty text labels"
+            )
+        labels = [label.strip() for label in labels]
+        if len(set(labels)) != len(labels):
+            raise SeriesClientError(
+                "omit_shared_image_labels must not contain duplicates"
+            )
+        canonical = _canonical_uuid(series_id, "series id")
+        result = self._request_json(
+            "PUT",
+            f"/api/series/{canonical}/shots/{shot_index}/reference-policy",
+            {"omit_shared_image_labels": labels},
+        )
+        if not isinstance(result, dict):
+            raise SeriesClientError("reference-policy response is invalid")
+        return result
+
     def retry_shot(
         self,
         series_id: str,
@@ -1479,6 +1583,19 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("shot_index", type=int)
     retry.add_argument("--regenerate-following", action="store_true")
 
+    reference_policy = commands.add_parser(
+        "set-reference-policy",
+        help="set shared-image omissions for one stopped zero-based shot",
+    )
+    reference_policy.add_argument("series_id")
+    reference_policy.add_argument("shot_index", type=int)
+    reference_policy.add_argument(
+        "--omit-shared-image-label",
+        action="append",
+        default=[],
+        help="repeat once for each shared image to omit; no flags clears the policy",
+    )
+
     download = commands.add_parser(
         "download", help="download final, manifest, or an allowlisted UUID"
     )
@@ -1685,6 +1802,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 options.series_id,
                 options.shot_index,
                 regenerate_following=options.regenerate_following,
+            )
+        elif command == "set-reference-policy":
+            result = client.set_shot_reference_policy(
+                options.series_id,
+                options.shot_index,
+                omit_shared_image_labels=options.omit_shared_image_label,
             )
         elif command == "artifacts":
             result = {"artifacts": client.list_artifacts(options.series_id)}
