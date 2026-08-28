@@ -13,6 +13,7 @@ from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
 from webapp.series_media import SeriesMediaError
 from webapp.series_runner import (
+    COMPLETED_OUTPUT_REFRESH_ATTEMPTS,
     LALACHAN_REFERENCE_LABELS,
     SeriesRunner,
     build_series_document,
@@ -592,6 +593,60 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recovered["document"]["shots"][0]["accepted_attempt"], 1)
         self.assertEqual(len(self.client.submissions), 1)
 
+    async def test_completed_job_boundedly_refreshes_delayed_output_without_resubmitting(
+        self,
+    ) -> None:
+        self.assertTrue(await self.runner.run_once())
+        job_id = self.client.submissions[0]["prompt_id"]
+        self.jobs.update(job_id, "completed", outputs=[])
+        self.client.get_job = AsyncMock(
+            side_effect=[
+                {"id": job_id, "status": "completed", "outputs": {}},
+                {
+                    "id": job_id,
+                    "status": "completed",
+                    "outputs": {"42": {"videos": [self.output_locator()]}},
+                },
+            ]
+        )
+
+        self.assertTrue(await self.runner.run_once())
+        recovered = self.series.get(self.series_id)
+        shot = recovered["document"]["shots"][0]
+        self.assertEqual(shot["status"], "completed")
+        self.assertEqual(shot["accepted_attempt"], 1)
+        self.assertEqual(len(shot["attempts"]), 1)
+        self.assertEqual(len(shot["attempts"][0]["artifact_ids"]), 1)
+        self.assertEqual(self.jobs.get(job_id)["outputs"], [self.output_locator()])
+        self.assertEqual(self.client.get_job.await_count, 2)
+        self.assertEqual(len(self.client.submissions), 1)
+
+    async def test_stale_completed_refresh_cannot_erase_concurrent_output(self) -> None:
+        self.assertTrue(await self.runner.run_once())
+        job_id = self.client.submissions[0]["prompt_id"]
+        self.jobs.update(job_id, "completed", outputs=[])
+        refresh_started = asyncio.Event()
+        release_refresh = asyncio.Event()
+
+        async def stale_completed_without_output(requested_job_id):
+            self.assertEqual(requested_job_id, job_id)
+            refresh_started.set()
+            await release_refresh.wait()
+            return {"id": job_id, "status": "completed", "outputs": {}}
+
+        self.client.get_job = AsyncMock(side_effect=stale_completed_without_output)
+        accepting = asyncio.create_task(self.runner.run_once())
+        await refresh_started.wait()
+        self.jobs.update(job_id, outputs=[self.output_locator()])
+        release_refresh.set()
+
+        self.assertTrue(await accepting)
+        recovered = self.series.get(self.series_id)
+        self.assertEqual(recovered["document"]["shots"][0]["status"], "completed")
+        self.assertEqual(self.jobs.get(job_id)["outputs"], [self.output_locator()])
+        self.assertEqual(self.client.get_job.await_count, 1)
+        self.assertEqual(len(self.client.submissions), 1)
+
     async def test_pause_during_preclaim_health_cannot_be_overwritten(self) -> None:
         health_started = asyncio.Event()
         release_health = asyncio.Event()
@@ -974,6 +1029,49 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         recovered = self.series.get(self.series_id)
         self.assertEqual(recovered["document"]["shots"][0]["status"], "completed")
         self.assertEqual(len(recovered["document"]["shots"][0]["attempts"]), 1)
+        self.assertEqual(len(self.client.submissions), 1)
+
+    async def test_retry_recovers_completed_job_output_before_artifact_attachment(
+        self,
+    ) -> None:
+        self.assertTrue(await self.runner.run_once())
+        job_id = self.client.submissions[0]["prompt_id"]
+        self.jobs.update(job_id, "completed", outputs=[])
+        self.client.get_job = AsyncMock(
+            return_value={"id": job_id, "status": "completed", "outputs": {}}
+        )
+
+        self.assertTrue(await self.runner.run_once())
+        failed = self.series.get(self.series_id)
+        failed_shot = failed["document"]["shots"][0]
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed_shot["status"], "failed")
+        self.assertEqual(failed_shot["attempts"][0]["artifact_ids"], [])
+        self.assertEqual(
+            self.client.get_job.await_count,
+            COMPLETED_OUTPUT_REFRESH_ATTEMPTS,
+        )
+        self.assertEqual(len(self.client.submissions), 1)
+
+        self.jobs.update(job_id, outputs=[self.output_locator()])
+        self.client.get_job = AsyncMock(
+            side_effect=AssertionError("stored terminal output must be reused")
+        )
+        resumed = await self.runner.retry(
+            self.series_id, 0, regenerate_following=False
+        )
+        self.assertEqual(resumed["status"], "running")
+        self.assertEqual(resumed["document"]["active_shot"], 0)
+        self.assertEqual(len(resumed["document"]["shots"][0]["attempts"]), 1)
+
+        self.assertTrue(await self.runner.run_once())
+        recovered = self.series.get(self.series_id)
+        recovered_shot = recovered["document"]["shots"][0]
+        self.assertEqual(recovered_shot["status"], "completed")
+        self.assertEqual(recovered_shot["accepted_attempt"], 1)
+        self.assertEqual(len(recovered_shot["attempts"]), 1)
+        self.assertEqual(len(recovered_shot["attempts"][0]["artifact_ids"]), 1)
+        self.client.get_job.assert_not_awaited()
         self.assertEqual(len(self.client.submissions), 1)
 
     async def test_retry_finalization_reuses_all_accepted_mp4s(self) -> None:

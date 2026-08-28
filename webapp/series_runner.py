@@ -46,6 +46,22 @@ LALACHAN_REFERENCE_LABELS = (
 LOGGER = logging.getLogger("h3-webapp.series")
 REFERENCE_TAG_PATTERN = re.compile(r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE)
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+COMPLETED_OUTPUT_REFRESH_ATTEMPTS = 6
+COMPLETED_OUTPUT_REFRESH_MAX_DELAY = 0.5
+
+
+def _video_output(job: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    outputs = job.get("outputs")
+    if isinstance(outputs, Sequence) and not isinstance(outputs, (str, bytes)):
+        return next(
+            (
+                item
+                for item in outputs
+                if isinstance(item, Mapping) and item.get("media_type") == "video"
+            ),
+            None,
+        )
+    return None
 
 
 def _text(value: Any, label: str, *, maximum: int, optional: bool = False) -> str:
@@ -800,6 +816,14 @@ class SeriesRunner:
         if status not in ACTIVE_STATUSES | {"completed", "failed", "cancelled"}:
             status = str(current["status"])
         outputs = flatten_outputs(upstream) if isinstance(upstream.get("outputs"), Mapping) else None
+        if outputs is not None and current["status"] not in ACTIVE_STATUSES:
+            current_outputs = current.get("outputs") or []
+            # A terminal row may be refreshed specifically because ComfyUI
+            # published its output locator just after publishing completion.
+            # Fill an empty row, but never let a stale response erase or
+            # replace already-preserved terminal outputs.
+            if current_outputs or not outputs:
+                outputs = None
         error = upstream.get("execution_error")
         error_text: str | None = None
         if isinstance(error, Mapping):
@@ -828,6 +852,46 @@ class SeriesRunner:
                 return current
             raise
         return self._sync_job(job_id, upstream)
+
+    async def _refresh_completed_output(
+        self, job: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Boundedly recover an output locator published just after completion."""
+
+        if _video_output(job) is not None:
+            return dict(job)
+        job_id = str(job.get("id") or "")
+        current = self.jobs.get(job_id)
+        if current is None:
+            raise SeriesMediaError("series render job is missing from the private registry")
+        if _video_output(current) is not None:
+            return current
+        if self.runtime_check is not None:
+            await self.runtime_check()
+        delay = min(
+            max(float(self.poll_interval), 0.01),
+            COMPLETED_OUTPUT_REFRESH_MAX_DELAY,
+        )
+        for refresh_index in range(COMPLETED_OUTPUT_REFRESH_ATTEMPTS):
+            if refresh_index:
+                await asyncio.sleep(delay)
+                current = self.jobs.get(job_id)
+                if current is None:
+                    raise SeriesMediaError(
+                        "series render job is missing from the private registry"
+                    )
+                if _video_output(current) is not None:
+                    return current
+            try:
+                upstream = await self.client.get_job(job_id)
+            except ComfyError as exc:
+                if exc.status != 404:
+                    raise
+            else:
+                current = self._sync_job(job_id, upstream)
+                if _video_output(current) is not None:
+                    return current
+        return current
 
     def _unrelated_job_active(self, series_id: str, own_job_id: str | None = None) -> bool:
         for job in self.jobs.active(limit=100):
@@ -1213,10 +1277,8 @@ class SeriesRunner:
         document = record["document"]
         shot = document["shots"][shot_index]
         attempt = shot["attempts"][-1]
-        outputs = job.get("outputs") or []
-        video_locator = next(
-            (item for item in outputs if item.get("media_type") == "video"), None
-        )
+        job = await self._refresh_completed_output(job)
+        video_locator = _video_output(job)
         if not isinstance(video_locator, Mapping):
             raise SeriesMediaError("completed H3 job has no saved video output")
         attempt_number = int(attempt["number"])
@@ -1619,13 +1681,27 @@ class SeriesRunner:
             if target["status"] == "failed" and not regenerate_following and target.get("attempts"):
                 latest = target["attempts"][-1]
                 latest_artifacts = set(latest.get("artifact_ids") or [])
-                reusable = any(
-                    artifact.get("id") in latest_artifacts
-                    and artifact.get("kind") == "shot"
-                    and (artifact.get("metadata") or {}).get("validation") == "passed"
+                attached_shots = [
+                    artifact
                     for artifact in document.get("artifacts") or []
+                    if artifact.get("id") in latest_artifacts
+                    and artifact.get("kind") == "shot"
+                ]
+                reusable_artifact = any(
+                    (artifact.get("metadata") or {}).get("validation") == "passed"
+                    for artifact in attached_shots
                 )
-                if reusable and self.jobs.status(str(latest["job_id"])) == "completed":
+                latest_job = self.jobs.get(str(latest["job_id"]))
+                recovered_unattached_output = (
+                    not attached_shots
+                    and isinstance(latest_job, Mapping)
+                    and _video_output(latest_job) is not None
+                )
+                if (
+                    isinstance(latest_job, Mapping)
+                    and latest_job.get("status") == "completed"
+                    and (reusable_artifact or recovered_unattached_output)
+                ):
                     target["status"] = "validating"
                     target["error"] = None
                     latest["status"] = "validating"
