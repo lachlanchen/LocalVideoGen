@@ -41,6 +41,17 @@ The workflow is inspired by the clarity of Xiaoyunque's storyboard experience, b
 
 See the [Series workflow guide](docs/series-workflow.md) for continuity and recovery behavior, the [cross-project Series API guide](docs/local-series-api.md) for the stdlib CLI/client and full HTTP contract, and the [smooth long-video options review](docs/smooth-long-video-options.md) for the trusted native H3 baseline, experimental continuity projects, optional interpolation, and quality gates.
 
+Review one paused or completed accepted shot without overwriting retained evidence:
+
+```bash
+./scripts/review_series_shot.sh \
+  /absolute/path/to/series-receipt.json \
+  0 \
+  runtime/private/quality-review
+```
+
+The zero-based helper downloads the verified accepted MP4 and, for a non-final shot, its current continuity tail and exact final frame. It fully decodes and probes the media, records hashes, creates a full contact sheet and outgoing-boundary strip, and prints—but never runs—an optional Whisper large-v2 command.
+
 ## What it delivers
 
 - Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, aligned NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.

@@ -181,7 +181,12 @@ trap 'exit 143' TERM
 
 # The lifecycle lock belongs only to this short start operation. Closing FD 8
 # in the child prevents the long-lived Comfy process from retaining its flock.
-nohup "$script_dir/run_comfyui.sh" 8>&- >>"$log_file" 2>&1 &
+# Detach the heavy runtime from this short-lived launcher's process group.
+# Some non-interactive runners terminate their command process group after the
+# launcher exits even though nohup already ignores SIGHUP.  The webapp
+# lifecycle uses the same setsid boundary, and ComfyUI needs it as well so a
+# successfully verified engine remains alive for long series renders.
+nohup setsid "$script_dir/run_comfyui.sh" 8>&- >>"$log_file" 2>&1 &
 launcher_pid=$!
 
 for _ in $(seq 1 "$startup_wait_seconds"); do
