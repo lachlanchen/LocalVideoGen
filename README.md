@@ -55,7 +55,7 @@ The zero-based helper downloads the verified accepted MP4 and, for a non-final s
 ## What it delivers
 
 - Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, aligned NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.
-- Dual-GPU stage placement: GPU 0 runs the DiT and denoiser; GPU 1 runs Qwen conditioning plus video/audio VAE stages. No PCIe peer-to-peer path is assumed.
+- Dual-GPU stage placement: GPU 0 runs the DiT, denoiser, and final video/audio decode; GPU 1 normally runs Qwen plus reference-conditioning VAE work. Keeping final decode on GPU 0 protects a completed sample if another workload later occupies GPU 1. No PCIe peer-to-peer path is assumed. On a shared workstation where a protected workload must retain GPU 1 from the start, launch the studio with `H3_AUX_DEVICE=gpu:0`; this keeps the same model, BF16 precision, sampler, resolution, and step count while using standard GPU-0/CPU offload for auxiliary conditioning.
 - Local T2V, I2V, and multi-reference R2V, including a max-identity reference preset and native synchronized audio.
 - Quality, single-GPU fallback, and low-resolution INT8 Turbo preview profiles.
 - Local H3 output up to a 768-pixel short edge at 24 fps. MiniMax's separate 2K regeneration stage is API-only and is not presented as a local feature.
@@ -107,6 +107,9 @@ cd LocalVideoGen
 
 ./scripts/start_comfyui.sh
 ./scripts/start_webapp.sh
+
+# Shared-workstation maximum-quality mode: leave protected GPU-1 work alive.
+H3_AUX_DEVICE=gpu:0 ./scripts/start_webapp.sh
 ```
 
 Open <http://127.0.0.1:8190>. ComfyUI remains private at <http://127.0.0.1:8188>.

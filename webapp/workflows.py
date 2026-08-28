@@ -7,6 +7,7 @@ subgraphs, selector widgets, and graph-to-prompt conversion at request time.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -19,10 +20,29 @@ WORKFLOW_ID = "local-video-gen-minimax-h3-webapp"
 TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
+AUX_DEVICE_ENV = "H3_AUX_DEVICE"
+DEFAULT_AUX_DEVICE = "gpu:1"
+SUPPORTED_AUX_DEVICES = frozenset({"gpu:0", "gpu:1"})
 
 
 class RequestError(ValueError):
     """A safe, user-facing render request error."""
+
+
+def auxiliary_device() -> str:
+    """Return the configured device for Qwen and reference conditioning.
+
+    GPU 1 remains the normal two-GPU layout. Shared workstations can set
+    ``H3_AUX_DEVICE=gpu:0`` so a protected workload may retain GPU 1 while H3
+    uses the same BF16 weights, resolution, sampler, and step count through
+    standard model offload on GPU 0.
+    """
+
+    value = os.environ.get(AUX_DEVICE_ENV, DEFAULT_AUX_DEVICE).strip().lower()
+    if value not in SUPPORTED_AUX_DEVICES:
+        choices = ", ".join(sorted(SUPPORTED_AUX_DEVICES))
+        raise RuntimeError(f"{AUX_DEVICE_ENV} must be one of: {choices}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -304,14 +324,21 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
     graph = _Graph()
     model = graph.add("UNETLoader", unet_name=_diffusion_model(spec), weight_dtype="default")
     clip = graph.add("CLIPLoader", clip_name=TEXT_ENCODER, type="minimax", device="default")
-    video_vae = graph.add("VAELoader", vae_name=VIDEO_VAE)
-    audio_vae = graph.add("VAELoader", vae_name=AUDIO_VAE)
+    decode_video_vae = graph.add("VAELoader", vae_name=VIDEO_VAE)
+    decode_audio_vae = graph.add("VAELoader", vae_name=AUDIO_VAE)
+    conditioning_video_vae = decode_video_vae
+    conditioning_audio_vae = decode_audio_vae
 
     if spec.profile.dual_gpu:
+        aux_device = auxiliary_device()
         model = graph.add("SelectModelDevice", model=graph.link(model), device="gpu:0")
-        clip = graph.add("SelectCLIPDevice", clip=graph.link(clip), device="gpu:1")
-        video_vae = graph.add("SelectVAEDevice", vae=graph.link(video_vae), device="gpu:1")
-        audio_vae = graph.add("SelectVAEDevice", vae=graph.link(audio_vae), device="gpu:1")
+        clip = graph.add("SelectCLIPDevice", clip=graph.link(clip), device=aux_device)
+        conditioning_video_vae = graph.add(
+            "SelectVAEDevice", vae=graph.link(decode_video_vae), device=aux_device
+        )
+        conditioning_audio_vae = graph.add(
+            "SelectVAEDevice", vae=graph.link(decode_audio_vae), device=aux_device
+        )
 
     if spec.profile.turbo:
         model = graph.add(
@@ -324,7 +351,7 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
     if spec.mode in {"t2v", "i2v"}:
         conditioning_inputs: dict[str, Any] = {
             "clip": graph.link(clip),
-            "vae": graph.link(video_vae),
+            "vae": graph.link(conditioning_video_vae),
             "prompt": spec.prompt,
             "width": spec.width,
             "height": spec.height,
@@ -340,8 +367,8 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
     else:
         conditioning_inputs = {
             "clip": graph.link(clip),
-            "vae": graph.link(video_vae),
-            "audio_vae": graph.link(audio_vae),
+            "vae": graph.link(conditioning_video_vae),
+            "audio_vae": graph.link(conditioning_audio_vae),
             "prompt": spec.prompt,
             "width": spec.width,
             "height": spec.height,
@@ -389,8 +416,15 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
         sigmas=graph.link(sigmas),
         latent_image=graph.link(conditioning, 1),
     )
-    frames = graph.add("VAEDecode", samples=graph.link(sampled), vae=graph.link(video_vae))
-    audio = graph.add("VAEDecodeAudio", samples=graph.link(sampled), vae=graph.link(audio_vae))
+    # Decode from the loader's default GPU-0 wrapper, not the auxiliary clone.
+    # This keeps a late protected GPU-1 workload from invalidating a completed
+    # multi-hour sample during final video/audio VAE work.
+    frames = graph.add(
+        "VAEDecode", samples=graph.link(sampled), vae=graph.link(decode_video_vae)
+    )
+    audio = graph.add(
+        "VAEDecodeAudio", samples=graph.link(sampled), vae=graph.link(decode_audio_vae)
+    )
     video = graph.add(
         "CreateVideo",
         images=graph.link(frames),
@@ -409,13 +443,25 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
 
 
 def public_config() -> dict[str, Any]:
+    aux_device = auxiliary_device()
+    profiles = []
+    for profile in PROFILES.values():
+        published = dict(profile.__dict__)
+        if profile.dual_gpu:
+            published["device_layout"] = {
+                "model": "gpu:0",
+                "conditioning": aux_device,
+                "final_decode": "gpu:0",
+            }
+            published["effective_dual_gpu"] = aux_device != "gpu:0"
+        profiles.append(published)
     return {
         "modes": [
             {"id": "t2v", "label": "Text to video", "short": "T2V", "description": "Create picture and native stereo audio from a prompt."},
             {"id": "i2v", "label": "Image to video", "short": "I2V", "description": "Animate a first frame, with an optional final frame."},
             {"id": "r2v", "label": "Reference to video", "short": "R2V", "description": "Guide identity, motion, style, or voice with mixed media."},
         ],
-        "profiles": [profile.__dict__ for profile in PROFILES.values()],
+        "profiles": profiles,
         "resolutions": list(RESOLUTION_PRESETS),
         "defaults": {
             "mode": "t2v",

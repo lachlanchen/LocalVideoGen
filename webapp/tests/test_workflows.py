@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from webapp.workflows import (
     AUDIO_VAE,
+    AUX_DEVICE_ENV,
     PROFILES,
     TEXT_ENCODER,
     VIDEO_VAE,
@@ -12,6 +14,7 @@ from webapp.workflows import (
     aligned_frame_count,
     compile_prompt,
     parse_render_spec,
+    public_config,
 )
 
 
@@ -124,6 +127,67 @@ class GraphMatrixTests(unittest.TestCase):
                     self.assertEqual([item["device"] for item in by_class["SelectVAEDevice"]], ["gpu:1", "gpu:1"])
                 else:
                     self.assertNotIn("SelectModelDevice", by_class)
+
+    def test_shared_workstation_can_keep_auxiliary_stages_on_gpu_zero(self):
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:0"}):
+            graph = graph_for("r2v", "quality_bf16_dual")
+            by_class: dict[str, list[dict]] = {}
+            for node in graph.values():
+                by_class.setdefault(node["class_type"], []).append(node["inputs"])
+            self.assertEqual(by_class["SelectModelDevice"][0]["device"], "gpu:0")
+            self.assertEqual(by_class["SelectCLIPDevice"][0]["device"], "gpu:0")
+            self.assertEqual(
+                [item["device"] for item in by_class["SelectVAEDevice"]],
+                ["gpu:0", "gpu:0"],
+            )
+            maximum = next(
+                profile
+                for profile in public_config()["profiles"]
+                if profile["id"] == "quality_bf16_dual"
+            )
+            self.assertFalse(maximum["effective_dual_gpu"])
+            self.assertEqual(
+                maximum["device_layout"],
+                {
+                    "model": "gpu:0",
+                    "conditioning": "gpu:0",
+                    "final_decode": "gpu:0",
+                },
+            )
+
+    def test_invalid_auxiliary_device_is_rejected(self):
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:9"}):
+            with self.assertRaisesRegex(RuntimeError, AUX_DEVICE_ENV):
+                graph_for("r2v", "quality_bf16_dual")
+
+    def test_dual_profile_decodes_from_default_gpu_zero_vae_wrappers(self):
+        graph = graph_for("r2v", "quality_bf16_dual")
+        loaders = {
+            node["inputs"]["vae_name"]: node_id
+            for node_id, node in graph.items()
+            if node["class_type"] == "VAELoader"
+        }
+        video_decode = next(
+            node for node in graph.values() if node["class_type"] == "VAEDecode"
+        )
+        audio_decode = next(
+            node for node in graph.values() if node["class_type"] == "VAEDecodeAudio"
+        )
+        self.assertEqual(video_decode["inputs"]["vae"][0], loaders[VIDEO_VAE])
+        self.assertEqual(audio_decode["inputs"]["vae"][0], loaders[AUDIO_VAE])
+
+        conditioning = next(
+            node
+            for node in graph.values()
+            if node["class_type"] == "MiniMaxH3ReferenceToVideo"
+        )
+        selected_vae_ids = {
+            node_id
+            for node_id, node in graph.items()
+            if node["class_type"] == "SelectVAEDevice"
+        }
+        self.assertIn(conditioning["inputs"]["vae"][0], selected_vae_ids)
+        self.assertIn(conditioning["inputs"]["audio_vae"][0], selected_vae_ids)
 
     def test_r2v_autogrow_and_audio_pairing(self):
         graph = graph_for("r2v", "quality_bf16_dual")

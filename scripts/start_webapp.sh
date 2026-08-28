@@ -8,6 +8,7 @@ state_file="$runtime_dir/webapp-state.json"
 lock_file="$runtime_dir/webapp-lifecycle.lock"
 port="${H3_WEBAPP_PORT:-8190}"
 comfy_url="${H3_COMFY_URL:-http://127.0.0.1:8188}"
+aux_device="${H3_AUX_DEVICE:-gpu:1}"
 identity=("$project_root/.venv/bin/python" "$script_dir/runtime_identity.py" --service webapp)
 
 if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then
@@ -15,6 +16,11 @@ if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( 10#$port < 1024 || 10#$port > 6553
   exit 2
 fi
 port=$((10#$port))
+if [[ "$aux_device" != "gpu:0" && "$aux_device" != "gpu:1" ]]; then
+  echo "H3_AUX_DEVICE must be gpu:0 or gpu:1." >&2
+  exit 2
+fi
+export H3_AUX_DEVICE="$aux_device"
 
 mkdir -p "$runtime_dir"
 install -d -m 700 "$runtime_dir/private"
@@ -125,7 +131,7 @@ for _ in $(seq 1 40); do
     [[ "$listener" == *"127.0.0.1:${port}"* ]] &&
     [[ "$listener" == *"pid=${launcher_pid},"* ]]; then
     trap - EXIT INT TERM
-    echo "H3 Studio is ready at http://127.0.0.1:${port} (verified PID $launcher_pid)."
+    echo "H3 Studio is ready at http://127.0.0.1:${port} (verified PID $launcher_pid; auxiliary stages on $aux_device)."
     echo "Log: $log_file"
     exit 0
   fi
