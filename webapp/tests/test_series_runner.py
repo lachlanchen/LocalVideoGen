@@ -356,6 +356,31 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertIn(required, prompt)
 
+    async def test_composed_prompt_keeps_ui_titles_out_of_generation_text(self) -> None:
+        document, payload, resolve = self.world_document()
+        document["title"] = "SPEAK_THIS_SERIES_TITLE"
+        document["shots"][0]["title"] = "SPEAK_THIS_SHOT_TITLE"
+        _, _, labels = self.runner._references_for_shot(document, 0)
+
+        prompt = self.runner._series_prompt(document, 0, labels)
+
+        self.assertNotIn("SPEAK_THIS_SERIES_TITLE", prompt)
+        self.assertNotIn("SPEAK_THIS_SHOT_TITLE", prompt)
+        self.assertIn("never speak or display a series title, shot title", prompt)
+        self.assertIn("Spoken content is limited to dialogue explicitly quoted", prompt)
+
+        payload["title"] = "SPEAK_THIS_SERIES_TITLE"
+        payload["shots"][0]["title"] = "SPEAK_THIS_SHOT_TITLE"
+        payload["shots"][0]["scene_reference"].pop("label")
+        fallback_document = build_series_document(payload, resolve)
+        _, _, fallback_labels = self.runner._references_for_shot(fallback_document, 0)
+        fallback_prompt = self.runner._series_prompt(
+            fallback_document, 0, fallback_labels
+        )
+        self.assertIn("<Picture 8> = Shot 1 location reference", fallback_prompt)
+        self.assertNotIn("SPEAK_THIS_SERIES_TITLE", fallback_prompt)
+        self.assertNotIn("SPEAK_THIS_SHOT_TITLE", fallback_prompt)
+
     async def test_successor_requires_complete_hashed_continuity_before_p9(self) -> None:
         document, _, _ = self.world_document()
         valid = {
@@ -751,7 +776,10 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         _, _, labels = self.runner._references_for_shot(document, 0)
         prompt = self.runner._series_prompt(document, 0, labels)
         self.assertIn("Target output: 1024x768; 5 seconds.", prompt)
-        self.assertIn("Series note: Keep the rainy blue-hour mood.", prompt)
+        self.assertIn(
+            "Silent series context, never speak or display: Keep the rainy blue-hour mood.",
+            prompt,
+        )
         self.assertIn("<Audio 1> = Opening soundtrack", prompt)
         self.assertIn("<Video 1> = Opening", prompt)
         self.assertIn("<Audio 2> = original audio from Audible scene", prompt)

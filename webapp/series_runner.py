@@ -202,7 +202,6 @@ def _compose_series_prompt(
     document: Mapping[str, Any], shot_index: int, labels: Sequence[str]
 ) -> str:
     shot = document["shots"][shot_index]
-    total = len(document["shots"])
     if document["template"] == "lalachan":
         guidance = (
             "LALACHAN series continuity: keep every named character's species, human face, costume, "
@@ -234,14 +233,20 @@ def _compose_series_prompt(
             "do not replay its completed action."
         )
     reference_map = "\nReference map:\n" + "\n".join(labels) if labels else ""
-    brief = f"\nSeries note: {document['brief']}" if document.get("brief") else ""
+    brief = (
+        f"\nSilent series context, never speak or display: {document['brief']}"
+        if document.get("brief")
+        else ""
+    )
     settings = document["settings"]
     target = (
         f"\nTarget output: {settings['width']}x{settings['height']}; "
         f"{float(shot['duration']):g} seconds."
     )
     return (
-        f"Series: {document['title']}. Shot {shot_index + 1} of {total}: {shot['title']}.\n"
+        "Production rule: never speak or display a series title, shot title, reference label, "
+        "production note or instruction. Spoken content is limited to dialogue explicitly quoted "
+        "in the authored shot direction.\n"
         f"{guidance}{continuity}{target}{brief}{reference_map}\n\n{shot['prompt']}"
     )
 
@@ -355,7 +360,8 @@ def build_series_document(
             assert scene_asset is not None
             scene_reference = _trusted_asset(
                 scene_asset,
-                label=scene_raw.get("label") or f"{shot_title} location",
+                label=scene_raw.get("label")
+                or f"Shot {index + 1} location reference",
             )
         elif scene_raw is not None:
             raise RequestError("scene_reference is only available for world_travel")
