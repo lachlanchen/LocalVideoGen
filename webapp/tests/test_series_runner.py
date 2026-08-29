@@ -423,7 +423,11 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_opening_prop_scrub_preserves_negative_grammar_and_story(self) -> None:
         input_root = Path(self.temporary.name) / "input"
         _, payload, resolve = self.world_document(input_root)
-        payload["brief"] = "Match the route and let the friends raise glasses together."
+        payload["brief"] = (
+            "Match the route and let the friends raise glasses together. "
+            "Current Picture 8 is authoritative. "
+            "Never display or speak titles, reference labels, or prompts."
+        )
         payload["shots"][1]["prompt"] = (
             "Match the Deosai meadow, and keep the notebook off-camera. "
             "No card, notebook, subtitles, duplicate cast, or montage. "
@@ -449,6 +453,9 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Match the Deosai meadow", prompt)
         self.assertIn("raise glasses together", prompt)
+        self.assertIn("Current Picture 5 is authoritative", prompt)
+        self.assertNotIn("Current Picture 8 is authoritative", prompt)
+        self.assertIn("Never display or speak titles", prompt)
         self.assertIn("No subtitles, duplicate cast, or montage", prompt)
         self.assertIn("Do not show labels, or extra people", prompt)
         self.assertNotRegex(prompt.lower(), r"\b(?:card|notebook)\b")

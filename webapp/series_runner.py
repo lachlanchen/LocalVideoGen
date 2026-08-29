@@ -73,6 +73,9 @@ REFERENCE_POLICY_STATES = frozenset(
 )
 LOGGER = logging.getLogger("h3-webapp.series")
 REFERENCE_TAG_PATTERN = re.compile(r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE)
+BARE_PICTURE_REFERENCE_PATTERN = re.compile(
+    r"(?<!<)\bPicture\s+([0-9]+)\b(?!\s*>)", re.IGNORECASE
+)
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 COMPLETED_OUTPUT_REFRESH_ATTEMPTS = 6
 COMPLETED_OUTPUT_REFRESH_MAX_DELAY = 0.5
@@ -296,7 +299,17 @@ def _remap_picture_tags(value: str, tag_map: Mapping[int, int]) -> str:
             else match.group(0)
         )
 
-    return REFERENCE_TAG_PATTERN.sub(replace, value)
+    remapped = REFERENCE_TAG_PATTERN.sub(replace, value)
+
+    def replace_bare(match: re.Match[str]) -> str:
+        physical_slot = tag_map.get(int(match.group(1)))
+        return (
+            f"Picture {physical_slot}"
+            if physical_slot is not None
+            else match.group(0)
+        )
+
+    return BARE_PICTURE_REFERENCE_PATTERN.sub(replace_bare, remapped)
 
 
 def _series_reference_labels(
@@ -464,7 +477,7 @@ def _without_omitted_opening_prop_mentions(
 
     exclusion_prefix = re.compile(
         r"^(?P<prefix>\s*(?:no|do\s+not\s+(?:show|include|display)|"
-        r"never\s+(?:show|include|display))\s+)",
+        r"never\s+(?:show|include|display))\s+)(?!or\b)",
         re.IGNORECASE,
     )
     exclusion_state = re.compile(
