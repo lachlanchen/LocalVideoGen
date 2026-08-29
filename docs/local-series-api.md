@@ -156,7 +156,7 @@ The raw **API payload** never accepts a filesystem path:
 }
 ```
 
-If a client spec omits setting values, the helper defaults to the production-quality contract above: `quality_bf16_dual`, 1024×768, `ref_image_size: "max"`, three-second continuity, and automatic advance. It never downgrades an explicitly selected profile. For World Travel, this cross-project client rejects any profile other than `quality_bf16_dual`.
+If a client spec omits setting values, the helper defaults to the production-quality contract above: `quality_bf16_dual`, 1024×768, `ref_image_size: "max"`, automatic advance, and template-aware continuity. World Travel uses two seconds to reduce repeated shot handles; LALACHAN Series and My Movie use three. It never replaces an explicit 2-, 3-, or 4-second choice and never downgrades an explicitly selected profile. For World Travel, this cross-project client rejects any profile other than `quality_bf16_dual`.
 
 BF16, dual-GPU placement, non-Turbo sampling, and 25 R2V steps define maximum *generation fidelity*. Canvas dimensions are a separate composition choice. The Italy example uses 1024×768 for a stable 4:3 ensemble composition. Choose the advertised 1344×768 preset for a wider native landscape with more horizontal scene area; it uses the same maximum-quality profile and 25 steps, while requiring more pixels and therefore more compute/memory.
 
@@ -171,7 +171,7 @@ Server limits remain authoritative:
 | shared pictures | At most 8 generally; World Travel uses exactly the canonical seven |
 | shared videos | At most 2, reserving H3’s third video slot for the preceding continuity tail |
 | shared audio | At most 3 |
-| continuity | 0, 2, 3, or 4 seconds; 3 is the quality default |
+| continuity | 0, 2, 3, or 4 seconds; World Travel defaults to 2, other templates to 3, and explicit values are preserved |
 | per-shot shared pictures | optional `omit_shared_image_labels`; Shot 1 keeps all shared pictures, and World Travel always keeps Robot plus all three cast pictures; the web UI and stdlib helper default the three opening-only labels off after Shot 1 |
 | prompt | Authored shot prompt at most 10,000 characters; composed prompt at most 12,000 |
 

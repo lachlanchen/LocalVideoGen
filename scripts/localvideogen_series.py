@@ -229,9 +229,9 @@ def _world_travel_effective_picture_layouts(
     if not isinstance(images, list):
         return []
     raw_continuity = (
-        settings.get("continuity_seconds", 3)
+        settings.get("continuity_seconds", 2)
         if isinstance(settings, Mapping)
-        else 3
+        else 2
     )
     if isinstance(raw_continuity, bool):
         raise SeriesClientError("continuity_seconds must be an integer")
@@ -1003,7 +1003,10 @@ class LocalVideoGenClient:
         settings.setdefault("width", 1024)
         settings.setdefault("height", 768)
         settings.setdefault("ref_image_size", "max")
-        settings.setdefault("continuity_seconds", 3)
+        settings.setdefault(
+            "continuity_seconds",
+            2 if payload.get("template") == "world_travel" else 3,
+        )
         settings.setdefault("advance", True)
 
         payload = _with_world_travel_omission_defaults(payload)

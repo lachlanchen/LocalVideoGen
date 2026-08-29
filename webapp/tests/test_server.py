@@ -165,6 +165,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         capability = config["series"]["capabilities"]["world_travel"]
         self.assertEqual(capability["template"], "world_travel")
         self.assertEqual(capability["render_mode"], "r2v")
+        self.assertEqual(capability["recommended_continuity_seconds"], 2)
         self.assertEqual(
             capability["maximum_quality_profile"], "quality_bf16_dual"
         )
@@ -301,7 +302,18 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('omit_shared_image_labels: worldTravelOmissionsForShot', script)
         self.assertIn('strong.textContent = "Opening-only reference guard"', script)
         self.assertIn('template === "world_travel"', script)
+        self.assertIn(
+            'templateContinuity: { lalachan: "3", world_travel: "2", movie: "3" }',
+            script,
+        )
         self.assertIn("previous shot's exact final frame", script)
+        for phrase in (
+            "reference tail is context only",
+            "next unseen moment",
+            "within 0.5 seconds",
+            "calm, natural human pace",
+        ):
+            self.assertIn(phrase, script)
         self.assertIn("/retry-finalization", script)
         self.assertIn("/start`, { method: \"POST\"", script)
 

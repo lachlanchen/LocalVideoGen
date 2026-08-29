@@ -392,18 +392,19 @@ def _compose_series_prompt(
     else:
         guidance = (
             "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, "
-            "voices and the previous shot's final action."
+            "voices, action direction and the state at the previous shot's final frame."
         )
     continuity = ""
     if shot_index > 0 and document["settings"]["continuity_seconds"]:
         continuity = (
-            " Continue directly and seamlessly from the previous-shot reference tail; "
-            "do not replay its completed action."
+            " The previous-shot reference tail is context only; treat its exact final frame as time zero. "
+            "Frame 1 begins the next unseen moment, and the new action continues at a calm, natural human "
+            "pace. Never replay, extend, pause on or restart the completed outgoing movement."
         )
         if document["template"] == "world_travel":
             continuity += (
-                " Complete the match into this shot's location within the first second; "
-                "from one second onward, show only the current location and this shot's new action."
+                " Complete any needed location match within 0.5 seconds without accelerating people; "
+                "after that, show only the current location and this shot's new action."
             )
     reference_map = "\nReference map:\n" + "\n".join(labels) if labels else ""
     _, picture_tag_map = _picture_reference_layout(
@@ -559,8 +560,10 @@ def build_series_document(
     ref_image_size = str(settings_raw.get("ref_image_size") or "max")
     if ref_image_size not in {"match", "max"}:
         raise RequestError("ref_image_size must be match or max")
+    default_continuity_seconds = 2 if template == "world_travel" else 3
     continuity_seconds = _plain_int(
-        settings_raw.get("continuity_seconds", 3), "continuity_seconds"
+        settings_raw.get("continuity_seconds", default_continuity_seconds),
+        "continuity_seconds",
     )
     if continuity_seconds not in {0, 2, 3, 4}:
         raise RequestError("continuity_seconds must be 0, 2, 3, or 4")

@@ -758,6 +758,7 @@ def create_app(
                     "template": "world_travel",
                     "render_mode": "r2v",
                     "maximum_quality_profile": "quality_bf16_dual",
+                    "recommended_continuity_seconds": 2,
                     "persistent_shared_image_labels": [
                         label
                         for label in LALACHAN_REFERENCE_LABELS

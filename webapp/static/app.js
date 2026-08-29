@@ -27,6 +27,7 @@ const state = {
     extras: { images: [], videos: [], audio: [] },
     shots: [],
     templateShots: { lalachan: null, world_travel: null, movie: null },
+    templateContinuity: { lalachan: "3", world_travel: "2", movie: "3" },
     sceneUploadVersions: new Map(),
     assetValidation: "verified",
     assetValidationVersion: 0,
@@ -172,6 +173,10 @@ const SERIES_TEMPLATE_TITLES = {
   world_travel: "New World Travel episode",
   movie: "My movie",
 };
+
+function defaultContinuityForTemplate(template) {
+  return template === "world_travel" ? "2" : "3";
+}
 
 const recipes = {
   t2v: `A cinematic single-take scene of [subject] in [environment].
@@ -844,11 +849,11 @@ function defaultSeriesShots(template = "lalachan") {
   } else if (template === "world_travel") {
     source = [
       ["Arrival and question", `Use <Picture 8> only as this shot's destination, architecture, terrain, light, and atmosphere anchor. Open with a motivated arrival and one visible question that starts the journey. Introduce the route through an action with <Picture 4> or <Picture 1>, not exposition. Keep the four travelers exact. Natural concise Chinese dialogue, accurate lip sync, native stereo ambience, and tactile travel sounds. No subtitles, narration, extra cast, checklist montage, or borrowed action from an earlier episode.`],
-      ["The oldest layer", `Continue seamlessly from <Picture 9> without replaying the prior action. Let <Picture 8> reveal one important historical layer through something the travelers can see, touch, cross, or compare. Turn one character's observation into a short question and a natural answer; show cause and effect instead of reciting facts. Preserve route, carried props, wardrobe, screen direction, voices, and all four identities. No subtitles, narration, or unrelated landmarks.`],
-      ["People who made it", `Continue the same journey from <Picture 9>. Use this shot's <Picture 8> to connect one maker, craft, artwork, building method, or local invention to a visible present-day detail. Give each character a distinct, brief reaction and keep the camera movement physically coherent. Natural Chinese conversation, accurate lip sync, local ambience, and precise prop sounds. Do not turn the scene into a lecture or copy an earlier episode's composition.`],
-      ["Everyday life", `Continue directly from <Picture 9>. In the place anchored by <Picture 8>, let the travelers encounter one ordinary custom, street, market, food, or social ritual that makes the destination feel lived in. The discovery must advance the same question or journey rather than pause for a travel advertisement. Preserve identities, route logic, time progression, wardrobe, voices, and carried props. No subtitles, narration, stereotypes, or unexplained cuts.`],
-      ["Road to the final place", `Use <Picture 9> to finish the prior movement and <Picture 8> only for the new stop. Make the geographic transition legible through a road, rail, river, path, doorway, or motivated visual match. Reveal one essential sight and one concise historical connection through action and dialogue. Keep screen direction, time progression, cast identity, voices, wardrobe, and props coherent. No tourist-checklist montage, narration, or borrowed plot direction.`],
-      ["Living memory", `Continue from <Picture 9> into the final place anchored by <Picture 8>. Resolve the opening question by showing how the destination's history remains alive in a present sound, object, street, craft, meal, or shared gesture. Complete the emotional thread through that visible detail, then end on a calm final composition suitable for future continuity. Warm concise Chinese dialogue, accurate lip sync, stereo place ambience. No subtitles, narration, new cast, or forced sequel tease.`],
+      ["The oldest layer", `Treat <Picture 9> as the already-completed previous moment. Begin the next unseen action at a calm, natural pace. Let <Picture 8> reveal one important historical layer through something the travelers can see, touch, cross, or compare. Turn one character's observation into a short question and a natural answer; show cause and effect instead of reciting facts. Preserve route, carried props, wardrobe, screen direction, voices, and all four identities. No subtitles, narration, or unrelated landmarks.`],
+      ["People who made it", `Treat <Picture 9> as already completed and begin the next unseen part of the same journey at a calm, natural pace. Use this shot's <Picture 8> to connect one maker, craft, artwork, building method, or local invention to a visible present-day detail. Give each character a distinct, brief reaction and keep the camera movement physically coherent. Natural Chinese conversation, accurate lip sync, local ambience, and precise prop sounds. Do not turn the scene into a lecture or copy an earlier episode's composition.`],
+      ["Everyday life", `Treat <Picture 9> as already completed; begin the next unseen action directly, without replay, at a calm, natural pace. In the place anchored by <Picture 8>, let the travelers encounter one ordinary custom, street, market, food, or social ritual that makes the destination feel lived in. The discovery must advance the same question or journey rather than pause for a travel advertisement. Preserve identities, route logic, time progression, wardrobe, voices, and carried props. No subtitles, narration, stereotypes, or unexplained cuts.`],
+      ["Road to the final place", `Treat <Picture 9> as the finished prior movement; do not extend it. Begin the next travel leg at a natural pace, using <Picture 8> only for the new stop. Make the geographic transition legible through a road, rail, river, path, doorway, or motivated visual match. Reveal one essential sight and one concise historical connection through action and dialogue. Keep screen direction, time progression, cast identity, voices, wardrobe, and props coherent. No tourist-checklist montage, narration, or borrowed plot direction.`],
+      ["Living memory", `Treat <Picture 9> as already completed and begin the next unseen moment in the final place anchored by <Picture 8>. Resolve the opening question by showing how the destination's history remains alive in a present sound, object, street, craft, meal, or shared gesture. Complete the emotional thread through that visible detail, then end on a calm final composition suitable for future continuity. Warm concise Chinese dialogue, accurate lip sync, stereo place ambience. No subtitles, narration, new cast, or forced sequel tease.`],
     ];
   } else {
     source = [
@@ -1087,6 +1092,10 @@ function restoreSeriesDraft() {
   }
   for (const template of SERIES_TEMPLATES) {
     state.series.templateShots[template] = normalizeDraftShots(draft.templateShots?.[template], template);
+    const savedContinuity = String(draft.templateContinuity?.[template] ?? "");
+    if (["0", "2", "3", "4"].includes(savedContinuity) && !(template === "world_travel" && savedContinuity === "0")) {
+      state.series.templateContinuity[template] = savedContinuity;
+    }
   }
   state.series.shots = normalizeDraftShots(draft.shots, draft.template)
     || cloneSeriesShots(state.series.templateShots[state.series.template] || []);
@@ -1094,7 +1103,16 @@ function restoreSeriesDraft() {
   if (typeof draft.brief === "string") elements.seriesBrief.value = draft.brief.slice(0, 2000);
   if (draft.profile && [...elements.seriesProfile.options].some((option) => option.value === draft.profile)) elements.seriesProfile.value = draft.profile;
   if (draft.resolution && [...elements.seriesResolution.options].some((option) => option.value === draft.resolution)) elements.seriesResolution.value = draft.resolution;
-  if (["0", "2", "3", "4"].includes(String(draft.continuity))) elements.seriesContinuity.value = String(draft.continuity);
+  if (["0", "2", "3", "4"].includes(String(draft.continuity))) {
+    const restoredContinuity = state.series.template === "world_travel" && String(draft.continuity) === "0"
+      ? "2"
+      : String(draft.continuity);
+    elements.seriesContinuity.value = restoredContinuity;
+    state.series.templateContinuity[state.series.template] = restoredContinuity;
+  } else {
+    elements.seriesContinuity.value = state.series.templateContinuity[state.series.template]
+      || defaultContinuityForTemplate(state.series.template);
+  }
   if (["max", "match"].includes(draft.refImageSize)) elements.seriesRefImageSize.value = draft.refImageSize;
   if (typeof draft.serverDraftId === "string") state.series.serverDraftId = draft.serverDraftId;
 }
@@ -1112,6 +1130,7 @@ function saveSeriesDraftSoon() {
       profile: elements.seriesProfile.value,
       resolution: elements.seriesResolution.value,
       continuity: elements.seriesContinuity.value,
+      templateContinuity: state.series.templateContinuity,
       refImageSize: elements.seriesRefImageSize.value,
       canonical: state.series.canonical,
       extras: state.series.extras,
@@ -1155,13 +1174,16 @@ function applySeriesTemplate(template) {
   if (!SERIES_TEMPLATES.includes(template) || template === state.series.template) return;
   const previous = state.series.template;
   state.series.templateShots[previous] = cloneSeriesShots(state.series.shots);
+  state.series.templateContinuity[previous] = elements.seriesContinuity.value;
   state.series.template = template;
   state.series.shots = cloneSeriesShots(state.series.templateShots[template] || defaultSeriesShots(template));
   state.series.templateShots[template] = cloneSeriesShots(state.series.shots);
   if (elements.seriesTitle.value === SERIES_TEMPLATE_TITLES[previous]) {
     elements.seriesTitle.value = SERIES_TEMPLATE_TITLES[template];
   }
-  if (isWorldTravel() && elements.seriesContinuity.value === "0") elements.seriesContinuity.value = "3";
+  const nextContinuity = state.series.templateContinuity[template] || defaultContinuityForTemplate(template);
+  elements.seriesContinuity.value = isWorldTravel() && nextContinuity === "0" ? "2" : nextContinuity;
+  state.series.templateContinuity[template] = elements.seriesContinuity.value;
   renderSeriesTemplate();
   renderCanonicalReferences();
   renderSeriesExtraAssets();
@@ -1184,7 +1206,10 @@ function renderSeriesTemplate() {
     radio.closest(".preset-card")?.classList.toggle("selected", radio.checked);
   }
   const travel = isWorldTravel();
-  if (travel && elements.seriesContinuity.value === "0") elements.seriesContinuity.value = "3";
+  if (travel && elements.seriesContinuity.value === "0") {
+    elements.seriesContinuity.value = "2";
+    state.series.templateContinuity.world_travel = "2";
+  }
   elements.worldTravelIdentityGuard.hidden = !travel;
   elements.seriesExtraImagesDrop.hidden = travel;
   elements.seriesExtraImages.disabled = travel;
@@ -1782,7 +1807,7 @@ function addSeriesShot() {
     id: newLocalId(),
     title: `Shot ${state.series.shots.length + 1}`,
     prompt: isWorldTravel()
-      ? `Continue from <Picture 9> without replaying its completed action. Use <Picture 8> only as this shot's destination, architecture, terrain, light, and atmosphere anchor. Advance the same motivated journey through one visible discovery, one concise historical or cultural connection, and natural Chinese dialogue. Preserve the four travelers, route logic, screen direction, time progression, wardrobe, voices, carried props, and native stereo sound. Do not copy any earlier episode's country, plot, actions, blocking, landmarks, palette, or composition. No subtitles, narration, tourist-checklist montage, or extra cast.`
+      ? `Treat <Picture 9> as the already-completed previous moment. Begin the next unseen action at a calm, natural pace. Use <Picture 8> only as this shot's destination, architecture, terrain, light, and atmosphere anchor. Advance the same motivated journey through one visible discovery, one concise historical or cultural connection, and natural Chinese dialogue. Preserve the four travelers, route logic, screen direction, time progression, wardrobe, voices, carried props, and native stereo sound. Do not copy any earlier episode's country, plot, actions, blocking, landmarks, palette, or composition. No subtitles, narration, tourist-checklist montage, or extra cast.`
       : `Continue the previous scene without replaying its completed action. Preserve all supplied identities, geography, screen direction, wardrobe, lighting logic, and audio space. Describe the next clear action, camera direction, exact dialogue, ambience, sound effects, and the final composition. No subtitles or interface text.`,
     duration: Number(previous?.duration) || 10,
     seed: nextSeed.toString(),
@@ -1920,11 +1945,15 @@ function composedSeriesPromptLength(shot, shotIndex) {
       : "Pictures 1-7 are shared identity and series-style anchors only. Picture 8 controls location, architecture, terrain, light and atmosphere for this shot only.";
     guidance = `LALACHAN World Travel continuity: lock every named character's identity, species, human face, body scale, wardrobe, accessories, relationships and voice across the whole journey. Keep the stated travel route, geography, screen direction and time progression coherent. ${pictureGuidance} Do not carry its place-specific details into another destination. Any earlier-episode, video or audio reference may guide character appearance or voice timbre only: never copy its country, plot, story direction, actions, blocking, landmarks or visual composition. Use natural concise dialogue and let one motivated journey connect the history and sights instead of presenting an unrelated tourist checklist.`;
   } else {
-    guidance = "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, voices and the previous shot's final action.";
+    guidance = "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, voices, action direction and the state at the previous shot's final frame.";
   }
-  const continuity = shotIndex > 0 && Number(elements.seriesContinuity.value)
-    ? " Continue directly and seamlessly from the previous-shot reference tail; do not replay its completed action."
-    : "";
+  let continuity = "";
+  if (shotIndex > 0 && Number(elements.seriesContinuity.value)) {
+    continuity = " The previous-shot reference tail is context only; treat its exact final frame as time zero. Frame 1 begins the next unseen moment, and the new action continues at a calm, natural human pace. Never replay, extend, pause on or restart the completed outgoing movement.";
+    if (isWorldTravel()) {
+      continuity += " Complete any needed location match within 0.5 seconds without accelerating people; after that, show only the current location and this shot's new action.";
+    }
+  }
   const resolution = elements.seriesResolution.selectedOptions[0];
   const target = `\nTarget output: ${Number(resolution?.dataset.width)}x${Number(resolution?.dataset.height)}; ${Number(shot.duration)} seconds.`;
   const briefText = elements.seriesBrief.value.trim();
@@ -2757,7 +2786,11 @@ function bindEvents() {
   for (const select of [elements.seriesProfile, elements.seriesResolution, elements.seriesRefImageSize]) {
     select.addEventListener("change", () => { updateSeriesReview(); saveSeriesDraftSoon(); });
   }
-  elements.seriesContinuity.addEventListener("change", () => { renderSeriesShots(); saveSeriesDraftSoon(); });
+  elements.seriesContinuity.addEventListener("change", () => {
+    state.series.templateContinuity[state.series.template] = elements.seriesContinuity.value;
+    renderSeriesShots();
+    saveSeriesDraftSoon();
+  });
   $("#addSeriesShot").addEventListener("click", addSeriesShot);
   for (const input of $$('input[data-series-kind]')) input.addEventListener("change", () => handleSeriesExtraUpload(input));
   $("#refreshSeries").addEventListener("click", refreshActiveSeries);

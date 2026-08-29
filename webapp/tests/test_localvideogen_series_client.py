@@ -464,7 +464,7 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
             self.assertEqual(spec, original)
             self.assertEqual(payload["settings"]["profile"], "quality_bf16_dual")
             self.assertEqual(payload["settings"]["ref_image_size"], "max")
-            self.assertEqual(payload["settings"]["continuity_seconds"], 3)
+            self.assertEqual(payload["settings"]["continuity_seconds"], 2)
             self.assertEqual(payload["settings"]["width"], 1024)
             self.assertEqual(payload["settings"]["height"], 768)
             self.assertEqual(client.config_checks, 1)
@@ -499,6 +499,7 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
         self.assertEqual(report["template"], "world_travel")
 
         payload = client.prepare_series_payload(spec)
+        self.assertEqual(payload["settings"]["continuity_seconds"], 3)
         self.assertEqual(
             payload["shots"][1]["omit_shared_image_labels"],
             ["Words card", "LightMind glasses", "Patchwork notebook"],

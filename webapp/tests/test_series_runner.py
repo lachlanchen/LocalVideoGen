@@ -266,6 +266,27 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         }
         return build_series_document(payload, resolve), payload, resolve
 
+    def test_continuity_default_is_template_specific(self) -> None:
+        _, payload, resolve = self.world_document()
+        payload["settings"].pop("continuity_seconds")
+
+        world_travel = build_series_document(payload, resolve)
+        self.assertEqual(world_travel["settings"]["continuity_seconds"], 2)
+
+        payload["settings"]["continuity_seconds"] = 3
+        explicit_world_travel = build_series_document(payload, resolve)
+        self.assertEqual(
+            explicit_world_travel["settings"]["continuity_seconds"], 3
+        )
+
+        payload["template"] = "lalachan"
+        payload["settings"].pop("continuity_seconds")
+        for index, shot in enumerate(payload["shots"]):
+            shot.pop("scene_reference")
+            shot["prompt"] = f"Continue the LALACHAN story in shot {index + 1}."
+        lalachan = build_series_document(payload, resolve)
+        self.assertEqual(lalachan["settings"]["continuity_seconds"], 3)
+
     async def test_waits_for_unrelated_job_then_chains_and_stitches(self) -> None:
         unrelated = str(uuid.uuid4())
         self.jobs.register(unrelated, {"mode": "t2v"}, status="pending")
@@ -353,7 +374,11 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "Picture 8 is the location",
             "for this shot only",
             "never copy its country, plot, story direction",
-            "Continue directly and seamlessly",
+            "reference tail is context only",
+            "exact final frame as time zero",
+            "next unseen moment",
+            "within 0.5 seconds",
+            "calm, natural human pace",
         ):
             self.assertIn(required, prompt)
 
@@ -417,7 +442,7 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotRegex(prompt.lower(), omitted_term)
         self.assertIn("Exactly four friends remain", prompt)
         self.assertIn("No subtitles, duplicate cast, or montage", prompt)
-        self.assertIn("within the first second", prompt)
+        self.assertIn("within 0.5 seconds", prompt)
         self.assertIn("shot-specific location picture", prompt)
 
     async def test_opening_prop_scrub_preserves_negative_grammar_and_story(self) -> None:

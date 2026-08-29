@@ -1,6 +1,6 @@
 # Smoother H3 long-video options
 
-This page records the quality decision for long MiniMax H3 series on this workstation. It was evaluated on 2026-08-28 against the linked upstream project sources. The trusted production path remains the pinned, official ComfyUI H3 implementation with the BF16 dual-GPU quality profile and LocalVideoGen's validated shot handoff. New continuity or interpolation projects are useful research candidates, but none should silently alter an accepted native render.
+This page records the quality decision for long MiniMax H3 series on this workstation. It was evaluated on 2026-08-28 against the linked upstream project sources and updated on 2026-08-29 after reviewing repeated boundary motion in the Pakistan episode. The trusted production path remains the pinned, official ComfyUI H3 implementation with the BF16 dual-GPU quality profile and LocalVideoGen's validated shot handoff. New continuity or interpolation projects are useful research candidates, but none should silently alter an accepted native render.
 
 ## Decision
 
@@ -8,7 +8,7 @@ For the Italy World Travel episode, use the existing native 24 fps H3 path:
 
 1. Render every shot with `quality_bf16_dual`, 25 full-model steps, one job at a time.
 2. Keep the seven canonical character/prop references stable. Give each World Travel shot its own scene plate as `<Picture 8>` and give shots after the first the preceding shot's exact final frame as `<Picture 9>`.
-3. Carry the preceding shot's validated three-second video/audio tail as continuity context. Preserve the authored prompt, seed, source hashes, exact final frame, tail, accepted MP4, and validation manifest.
+3. Carry the preceding shot's validated two-second video/audio tail as World Travel continuity context. Treat it as an already-completed moment, begin the next unseen action at a calm human pace, and preserve the authored prompt, seed, source hashes, exact final frame, tail, accepted MP4, and validation manifest. Explicit three- or four-second choices remain available for shots that genuinely need them.
 4. Review and accept the native 24 fps master before trying any optional smoother derivative.
 
 This is the least speculative route because it uses the pinned runtime, the official core H3 nodes, and continuity behavior already exercised by LocalVideoGen. The [official ComfyUI H3 implementation](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_extras/nodes_minimax_h3.py) contains the native H3 conditioning and first/last-image support; it also enforces H3's frame-grid constraints. LocalVideoGen adds durable attempts, exact handoff artifacts, sequential GPU admission, full-media validation, and lossless final concatenation around that core.
@@ -47,7 +47,7 @@ The World Travel handoff deliberately separates stable identity from changing ge
 | `<Picture 1>`–`<Picture 7>` | Same ordered words-card, robot, glasses, notebook, and three-character identity references for every shot |
 | `<Picture 8>` | The current shot's location-specific scene plate; changes per shot, is hashed before submission |
 | `<Picture 9>` | The previous accepted shot's exact final frame; absent only for shot 1 |
-| Continuity video/audio | The preceding accepted shot's accurately trimmed three-second tail, with its native soundtrack |
+| Continuity video/audio | The preceding accepted shot's accurately trimmed two-second World Travel tail, with its native soundtrack; explicit 3- or 4-second choices remain supported |
 | Authored prompt | States what must persist and what must change; prior-episode references may transfer identity/voice only, never plot, destination, palette, or camera direction |
 
 The exact prior frame gives H3 the strongest available boundary-appearance reference in this production graph; the tail supplies recent movement and sound context. They are complementary, but Ref2VA conditioning does not force pixel-exact frames or sample-exact waveform continuation. Neither input should be replaced by a loosely selected screenshot or a re-encoded social-media copy.
@@ -90,7 +90,7 @@ Keep review evidence next to the derivative: contact sheet, short boundary extra
 
 ### Stage 0 — Italy production
 
-- Keep the official pinned H3 graph, BF16 dual-GPU quality profile, P8/P9 references, and three-second tail.
+- Keep the official pinned H3 graph, BF16 dual-GPU quality profile, P8/P9 references, and two-second World Travel tail.
 - Preserve all expensive attempts and accepted native masters.
 - Do not enable custom nodes or change the sampling/runtime environment mid-episode.
 
@@ -104,7 +104,7 @@ Keep review evidence next to the derivative: contact sheet, short boundary extra
 
 - Review and pin `comfyui-h3-motion-context` and all transitive dependencies in a separate experimental profile.
 - Recreate a short two-shot boundary from retained source artifacts; do not spend six-shot production GPU time first.
-- Compare against LocalVideoGen's exact-frame plus three-second-tail baseline with identical prompts, references, seeds where supported, and resolution.
+- Compare against LocalVideoGen's exact-frame plus two-second-tail World Travel baseline with identical prompts, references, seeds where supported, and resolution.
 - Measure waveform continuity as well as listening and lip-sync. The upstream README discloses cumulative high-frequency loss down long audio chains, an approximately constant 10 ms audio offset in its tests, and narrow validation on one machine/configuration; reproduce those measurements locally rather than assuming they transfer.
 - Reject the integration if it changes voice timing, increases identity drift, makes recovery nondeterministic, or requires untracked process patches.
 

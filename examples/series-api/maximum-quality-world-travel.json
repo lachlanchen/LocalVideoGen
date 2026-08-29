@@ -7,7 +7,7 @@
     "width": 1024,
     "height": 768,
     "ref_image_size": "max",
-    "continuity_seconds": 3,
+    "continuity_seconds": 2,
     "advance": false
   },
   "references": {
