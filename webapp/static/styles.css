@@ -594,6 +594,15 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .scene-reference-remove { min-height: 34px; padding: 5px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--quiet); cursor: pointer; font-size: 0.6rem; }
 .scene-reference-remove:hover { background: rgba(var(--red-rgb), 0.1); color: var(--red); }
 .scene-reference-guard { margin: 7px 0 0; color: var(--quiet); font-size: 0.57rem; line-height: 1.42; }
+.shot-reference-policy { margin: 0 0 11px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface-card) 88%, transparent); }
+.shot-reference-policy-heading strong, .shot-reference-policy-heading small { display: block; }
+.shot-reference-policy-heading strong { color: var(--ink); font-size: 0.66rem; }
+.shot-reference-policy-heading small { margin-top: 2px; color: var(--quiet); font-size: 0.58rem; line-height: 1.4; }
+.shot-reference-policy-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.shot-reference-policy-options label { display: inline-flex; min-height: 31px; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; font-size: 0.59rem; font-weight: 700; }
+.shot-reference-policy-options label:has(input:checked) { border-color: rgba(var(--green-rgb), 0.35); background: rgba(var(--green-rgb), 0.055); color: var(--text); }
+.shot-reference-policy-options input { width: 14px; height: 14px; accent-color: var(--accent); }
+.shot-reference-policy-guard { margin: 7px 0 0; color: var(--quiet); font-size: 0.57rem; line-height: 1.42; }
 .shot-reference-map { margin-top: 8px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-card-strong) 82%, transparent); }
 .shot-reference-map summary { cursor: pointer; padding: 8px 10px; color: var(--quiet); font-size: 0.62rem; font-weight: 700; }
 .shot-reference-map-list { display: grid; gap: 4px; padding: 0 10px 10px; color: var(--quiet); font-size: 0.58rem; }

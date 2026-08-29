@@ -20,7 +20,9 @@ The LALACHAN and World Travel picture order remains fixed in every shot:
 | `<Picture 6>` | Aya Chan |
 | `<Picture 7>` | Sasa Kun — a human-faced boy in a panda hoodie |
 
-For World Travel, the current shot's required destination plate is authored as logical `<Picture 8>` and the preceding accepted shot's exact final frame as logical `<Picture 9>`. Later shots may omit opening-only shared images such as the Words card, LightMind glasses, and Patchwork notebook while the Robot and three cast references remain mandatory. H3 Studio removes omitted files from the graph and provenance, compacts the physical picture slots, and remaps the authored logical tags before submission. The destination plate controls only that shot's architecture, terrain, light, atmosphere, and geography; it does not carry the previous country's story direction forward. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
+For World Travel, the current shot's required destination plate is authored as logical `<Picture 8>` and the preceding accepted shot's exact final frame as logical `<Picture 9>`. After Shot 1, the storyboard defaults to omitting the Words card, LightMind glasses, and Patchwork notebook so opening props cannot silently pull every costly render back toward the same composition. Each shot card exposes those three choices: uncheck one only when that shot deliberately uses it. Robot and the three cast references remain mandatory. H3 Studio removes omitted files from the graph and provenance, shows the compact effective H3 map before start, and remaps the authored logical tags before submission. The destination plate controls only that shot's architecture, terrain, light, atmosphere, and geography; it does not carry the previous country's story direction forward. Up to two shared reference videos are allowed because the third H3 video slot is reserved for the continuity tail.
+
+For the same later shots, H3 Studio removes prose clauses that name an omitted opening prop—even a negative phrase such as “no notebook”—before conditioning the model. This matters because naming an absent object can still encourage a generative model to reconstruct it. Continuity guidance also requires the incoming tail to complete its location match within the first second, reducing repeated predecessor scenery without discarding the verified handoff.
 
 LALACHAN Series does not require a per-shot destination plate, so its optional exact final-frame handoff uses the next free picture slot after the seven shared anchors. The UI and API capability response expose the effective tags before submission; callers should not hard-code World Travel's P8/P9 layout for another template.
 
@@ -30,7 +32,7 @@ LALACHAN Series does not require a per-shot destination plate, so its optional e
 2. Choose a template, project title, and one quality profile for the entire movie.
 3. Upload shared cast, world, voice, music, and motion references once.
 4. Edit, add, duplicate, delete, or reorder 2–12 shot cards. Every shot has its own title, prompt, requested duration, and seed.
-5. Review the aligned 24 fps frame count, total actual duration, canvas, identity fidelity, continuity length, runtime readiness, and reference limits in preflight.
+5. Review the aligned 24 fps frame count, total actual duration, canvas, identity fidelity, continuity length, per-shot effective reference maps, runtime readiness, and reference limits in preflight. Any authored P1–P9 tag whose effective reference was omitted blocks start.
 6. Select **Save & start new storyboard**. H3 Studio stores a durable private project before asking the local engine to render.
 
 ## How continuity advances

@@ -4,6 +4,8 @@
 
 The example mirrors the production route: Rome Colosseum → Roman Forum → Florence Duomo → Uffizi/Ponte Vecchio → Venice San Marco → a Venice bacaro at blue hour. It fixes `quality_bf16_dual` (BF16, dual GPU, non-Turbo, 25 R2V steps), 1024×768 4:3 composition, maximum reference fidelity, three-second continuity, six ten-second shots, seven canonical LALACHAN identity references, and one authoritative location image per shot. The profile is the maximum-fidelity choice; 1024×768 is a deliberate story composition, not a claim that it is the largest canvas. Use 1344×768 for a wider native landscape while retaining the same profile and 25-step fidelity.
 
+Its per-shot `omit_shared_image_labels` values demonstrate the opening-prop guard: later shots drop the words card, LightMind glasses, and patchwork notebook unless that exact shot uses one. An explicit empty list is the keep-all override. Prompts continue to use logical P8/P9; preflight shows and validates the compact physical H3 slots before any upload or render.
+
 Its only Iran reference is an audio-only dialogue guide of no more than 15 seconds. Excluding Iran’s video frames, ambience, and music is the strongest way to prevent that episode from steering Italy’s plot, architecture, geography, palette, or composition. Clip and AAC-encode the portable example’s expected file without overwriting an existing guide:
 
 ```bash

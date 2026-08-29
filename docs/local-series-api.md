@@ -29,7 +29,12 @@ The existing `profiles`, `series.templates`, limits, and defaults remain present
     "shot_reference_policy": {
       "field": "omit_shared_image_labels",
       "logical_picture_tags_remapped": true,
-      "first_shot_must_keep_all": true
+      "first_shot_must_keep_all": true,
+      "recommended_omissions_after_first": [
+        "Words card",
+        "LightMind glasses",
+        "Patchwork notebook"
+      ]
     },
     "capabilities": {
       "world_travel": {
@@ -84,7 +89,7 @@ Before uploading, a maximum-quality World Travel caller should verify all of the
 
 This discovery request does not upload media or start the engine.
 
-The stdlib client performs this preflight automatically before `create`, `update`, or `run` can upload anything. It requires API version 1, the selected profile to exist, and—on World Travel—the exact R2V P1–P9 contract above plus `quality_bf16_dual` as BF16, dual-GPU, non-Turbo, 25-step R2V. It refuses a different contract or World Travel profile instead of silently downgrading. A direct `upload`, any source-backed create/update/run, and `start` also require a successful deep health result (`connected: true`, `ready: true`, `model_status: "verified"`). Starting an existing series first fetches and preflights that same durable series ID.
+The stdlib client performs this preflight automatically before `create`, `update`, or `run` can upload anything. It requires API version 1, the selected profile to exist, and—on World Travel—the exact R2V P1–P9 contract above plus `quality_bf16_dual` as BF16, dual-GPU, non-Turbo, 25-step R2V. It refuses a different contract or World Travel profile instead of silently downgrading. It also computes every shot's effective compact picture list, verifies that Robot plus all three travelers remain, and rejects an authored logical picture tag that the shot omits. A direct `upload`, any source-backed create/update/run, and `start` also require a successful deep health result (`connected: true`, `ready: true`, `model_status: "verified"`). Starting an existing series first fetches and preflights that same durable series ID before the costly start request is sent.
 
 ## Runtime preparation
 
@@ -167,7 +172,7 @@ Server limits remain authoritative:
 | shared videos | At most 2, reserving H3’s third video slot for the preceding continuity tail |
 | shared audio | At most 3 |
 | continuity | 0, 2, 3, or 4 seconds; 3 is the quality default |
-| per-shot shared pictures | optional `omit_shared_image_labels`; Shot 1 keeps all shared pictures, and World Travel always keeps Robot plus all three cast pictures |
+| per-shot shared pictures | optional `omit_shared_image_labels`; Shot 1 keeps all shared pictures, and World Travel always keeps Robot plus all three cast pictures; the web UI and stdlib helper default the three opening-only labels off after Shot 1 |
 | prompt | Authored shot prompt at most 10,000 characters; composed prompt at most 12,000 |
 
 ## World Travel reference contract
@@ -201,7 +206,7 @@ Every shot additionally requires one image:
 
 For that shot, the location image becomes `<Picture 8>`. With continuity enabled, the exact final frame from the previous accepted shot becomes `<Picture 9>`, and its accurate 2–4 second tail occupies the reserved video slot. The scene image controls only that shot’s architecture, terrain, light, atmosphere, and geography. It is not carried into the next destination.
 
-Later shots can keep identity references while removing opening props that otherwise tend to reappear. Add this optional field to an individual shot:
+Later shots can keep identity references while removing opening props that otherwise tend to reappear. The web UI checks these three omissions by default, shows the resulting physical H3 map inside each shot card, and lets you uncheck a label when that shot deliberately needs the prop. The stdlib helper applies the same default when a later World Travel shot omits the field. Add or edit the field explicitly in a client spec:
 
 ```json
 "omit_shared_image_labels": [
@@ -211,7 +216,9 @@ Later shots can keep identity references while removing opening props that other
 ]
 ```
 
-Shot 1 must use all seven canonical pictures. World Travel never permits omitting `Zhuangzi Robot`, `Rara Xia`, `Aya Chan`, or `Sasa Kun`. The policy removes the selected files from that shot's H3 graph and reference provenance; it is not merely a negative-prompt hint. Authored picture tags retain their canonical logical meaning: for the example above, authored `<Picture 8>` is automatically remapped to physical `<Picture 5>` for the scene plate, and logical `<Picture 9>` becomes physical `<Picture 6>` for continuity. An authored tag for an omitted picture is rejected before GPU submission.
+Shot 1 must use all seven canonical pictures. World Travel never permits omitting `Zhuangzi Robot`, `Rara Xia`, `Aya Chan`, or `Sasa Kun`. The policy removes the selected files from that shot's H3 graph and reference provenance; it is not merely a negative-prompt hint. The prompt composer also removes prose clauses naming an omitted opening prop, including negative mentions that can still pull the model toward that object. Authored picture tags retain their canonical logical meaning: for the example above, authored `<Picture 8>` is automatically remapped to physical `<Picture 5>` for the scene plate, and logical `<Picture 9>` becomes physical `<Picture 6>` for continuity. An authored tag for an omitted picture is rejected before source upload or GPU submission. An explicit empty list keeps all seven pictures for a later shot that intentionally uses the card, glasses, or notebook.
+
+For raw HTTP compatibility, the server still interprets a missing field as an empty omission list. Callers that bypass the supported web UI or stdlib helper should therefore send the three-label policy explicitly. Existing durable series are not rewritten; their saved per-shot lists remain authoritative when `start`, `resume`, or `retry` preflights them.
 
 A ready, paused, failed, cancelled, or completed series can set the policy for a future attempt without replacing the series or altering any saved attempt:
 

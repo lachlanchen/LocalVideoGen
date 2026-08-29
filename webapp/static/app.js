@@ -150,6 +150,11 @@ const LALACHAN_REFERENCES = [
   ["Sasa Kun", "Human boy, visible face, panda hoodie"],
 ];
 const WORLD_TRAVEL_REFERENCES = LALACHAN_REFERENCES;
+const WORLD_TRAVEL_OPENING_ONLY_REFERENCES = [
+  "Words card",
+  "LightMind glasses",
+  "Patchwork notebook",
+];
 const MOVIE_REFERENCES = [
   ["Main character", "Primary face, costume, or subject"],
   ["Supporting character", "Second identity or object"],
@@ -843,7 +848,7 @@ function defaultSeriesShots(template = "lalachan") {
       ["People who made it", `Continue the same journey from <Picture 9>. Use this shot's <Picture 8> to connect one maker, craft, artwork, building method, or local invention to a visible present-day detail. Give each character a distinct, brief reaction and keep the camera movement physically coherent. Natural Chinese conversation, accurate lip sync, local ambience, and precise prop sounds. Do not turn the scene into a lecture or copy an earlier episode's composition.`],
       ["Everyday life", `Continue directly from <Picture 9>. In the place anchored by <Picture 8>, let the travelers encounter one ordinary custom, street, market, food, or social ritual that makes the destination feel lived in. The discovery must advance the same question or journey rather than pause for a travel advertisement. Preserve identities, route logic, time progression, wardrobe, voices, and carried props. No subtitles, narration, stereotypes, or unexplained cuts.`],
       ["Road to the final place", `Use <Picture 9> to finish the prior movement and <Picture 8> only for the new stop. Make the geographic transition legible through a road, rail, river, path, doorway, or motivated visual match. Reveal one essential sight and one concise historical connection through action and dialogue. Keep screen direction, time progression, cast identity, voices, wardrobe, and props coherent. No tourist-checklist montage, narration, or borrowed plot direction.`],
-      ["Living memory", `Continue from <Picture 9> into the final place anchored by <Picture 8>. Resolve the opening question by showing how the destination's history remains alive in a present sound, object, street, craft, meal, or shared gesture. Let <Picture 1> or <Picture 4> complete the emotional thread, then end on a calm final composition suitable for future continuity. Warm concise Chinese dialogue, accurate lip sync, stereo place ambience. No subtitles, narration, new cast, or forced sequel tease.`],
+      ["Living memory", `Continue from <Picture 9> into the final place anchored by <Picture 8>. Resolve the opening question by showing how the destination's history remains alive in a present sound, object, street, craft, meal, or shared gesture. Complete the emotional thread through that visible detail, then end on a calm final composition suitable for future continuity. Warm concise Chinese dialogue, accurate lip sync, stereo place ambience. No subtitles, narration, new cast, or forced sequel tease.`],
     ];
   } else {
     source = [
@@ -859,6 +864,7 @@ function defaultSeriesShots(template = "lalachan") {
     duration: 10,
     seed: seeds[index],
     sceneReference: null,
+    omitSharedImageLabels: template === "world_travel" && index > 0 ? [...WORLD_TRAVEL_OPENING_ONLY_REFERENCES] : [],
   }));
 }
 
@@ -866,10 +872,27 @@ function cloneSeriesShots(shots) {
   return shots.map((shot) => ({
     ...shot,
     sceneReference: shot.sceneReference ? { ...shot.sceneReference, metadata: { ...(shot.sceneReference.metadata || {}) } } : null,
+    omitSharedImageLabels: Array.isArray(shot.omitSharedImageLabels) ? [...shot.omitSharedImageLabels] : [],
   }));
 }
 
-function normalizeDraftShots(shots) {
+function normalizedWorldTravelOmissions(shot, index) {
+  if (index === 0) return [];
+  const saved = Array.isArray(shot?.omitSharedImageLabels)
+    ? shot.omitSharedImageLabels
+    : Array.isArray(shot?.omit_shared_image_labels)
+      ? shot.omit_shared_image_labels
+      : null;
+  if (saved === null) return [...WORLD_TRAVEL_OPENING_ONLY_REFERENCES];
+  const selected = new Set(saved.filter((label) => typeof label === "string"));
+  return WORLD_TRAVEL_OPENING_ONLY_REFERENCES.filter((label) => selected.has(label));
+}
+
+function worldTravelOmissionsForShot(shot, index) {
+  return normalizedWorldTravelOmissions(shot, index);
+}
+
+function normalizeDraftShots(shots, template = "lalachan") {
   if (!Array.isArray(shots)) return null;
   const normalized = shots.slice(0, 12).map((shot, index) => ({
     id: typeof shot?.id === "string" ? shot.id : newLocalId(),
@@ -878,6 +901,7 @@ function normalizeDraftShots(shots) {
     duration: Math.min(15, Math.max(5, Number(shot?.duration) || 10)),
     seed: /^[0-9]+$/.test(String(shot?.seed || "")) ? String(shot.seed) : String(20260828 + index),
     sceneReference: normalizeDraftAsset(shot?.sceneReference),
+    omitSharedImageLabels: template === "world_travel" ? normalizedWorldTravelOmissions(shot, index) : [],
   }));
   return normalized.length >= 2 ? normalized : null;
 }
@@ -1062,9 +1086,9 @@ function restoreSeriesDraft() {
     state.series.extras[key] = Array.isArray(draft.extras?.[key]) ? draft.extras[key].map(normalizeDraftAsset).filter(Boolean) : [];
   }
   for (const template of SERIES_TEMPLATES) {
-    state.series.templateShots[template] = normalizeDraftShots(draft.templateShots?.[template]);
+    state.series.templateShots[template] = normalizeDraftShots(draft.templateShots?.[template], template);
   }
-  state.series.shots = normalizeDraftShots(draft.shots)
+  state.series.shots = normalizeDraftShots(draft.shots, draft.template)
     || cloneSeriesShots(state.series.templateShots[state.series.template] || []);
   if (typeof draft.title === "string") elements.seriesTitle.value = draft.title.slice(0, 120);
   if (typeof draft.brief === "string") elements.seriesBrief.value = draft.brief.slice(0, 2000);
@@ -1575,6 +1599,62 @@ function renderShotSceneReference(shot, index) {
   return editor;
 }
 
+function renderShotReferencePolicy(shot, index) {
+  const editor = document.createElement("section");
+  editor.className = "shot-reference-policy";
+  editor.setAttribute("aria-label", `Shot ${index + 1} shared reference policy`);
+
+  const heading = document.createElement("div");
+  heading.className = "shot-reference-policy-heading";
+  const strong = document.createElement("strong");
+  strong.textContent = "Opening-only reference guard";
+  const small = document.createElement("small");
+  heading.append(strong, small);
+  editor.append(heading);
+
+  if (index === 0) {
+    small.textContent = "Shot 1 keeps all seven canonical pictures for the opening.";
+    return editor;
+  }
+
+  const controls = document.createElement("div");
+  controls.className = "shot-reference-policy-options";
+  const updateCopy = () => {
+    const count = worldTravelOmissionsForShot(shot, index).length;
+    small.textContent = count
+      ? `${count} opening-only picture${count === 1 ? " is" : "s are"} excluded from this H3 render.`
+      : "All seven pictures will be sent; keep this only when the shot deliberately uses those props.";
+  };
+  WORLD_TRAVEL_OPENING_ONLY_REFERENCES.forEach((label) => {
+    const option = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = worldTravelOmissionsForShot(shot, index).includes(label);
+    checkbox.setAttribute("aria-label", `Omit ${label} from Shot ${index + 1}`);
+    const copy = document.createElement("span");
+    copy.textContent = `Omit ${label}`;
+    checkbox.addEventListener("change", () => {
+      const selected = new Set(worldTravelOmissionsForShot(shot, index));
+      if (checkbox.checked) selected.add(label);
+      else selected.delete(label);
+      shot.omitSharedImageLabels = WORLD_TRAVEL_OPENING_ONLY_REFERENCES.filter((item) => selected.has(item));
+      updateCopy();
+      updateSeriesReview();
+      saveSeriesDraftSoon();
+    });
+    option.append(checkbox, copy);
+    controls.append(option);
+  });
+  updateCopy();
+  editor.append(controls);
+
+  const guard = document.createElement("p");
+  guard.className = "shot-reference-policy-guard";
+  guard.textContent = "Checked files are removed, not just discouraged in the prompt. Robot and all three travelers always remain; authored P8/P9 tags remap automatically.";
+  editor.append(guard);
+  return editor;
+}
+
 function renderSeriesShots() {
   elements.seriesShotList.replaceChildren();
   state.series.shots.forEach((shot, index) => {
@@ -1630,7 +1710,9 @@ function renderSeriesShots() {
     referenceMap.className = "shot-reference-map";
     referenceMap.dataset.shotReferenceMap = String(index);
     const referenceSummary = document.createElement("summary");
-    referenceSummary.textContent = "Exact reference tags for this shot";
+    referenceSummary.textContent = isWorldTravel()
+      ? "Effective H3 reference tags · authored P8/P9 remap automatically"
+      : "Exact reference tags for this shot";
     const referenceList = document.createElement("div");
     referenceList.className = "shot-reference-map-list";
     referenceMap.append(referenceSummary, referenceList);
@@ -1672,7 +1754,7 @@ function renderSeriesShots() {
     seed.addEventListener("input", () => updateShotState(shot.id, "seed", seed.value));
     seedLabel.append(seedText, seed);
     settings.append(durationLabel, seedLabel);
-    if (isWorldTravel()) body.append(renderShotSceneReference(shot, index));
+    if (isWorldTravel()) body.append(renderShotSceneReference(shot, index), renderShotReferencePolicy(shot, index));
     body.append(promptLabel, prompt, referenceMap, settings);
 
     if (index > 0) {
@@ -1705,6 +1787,7 @@ function addSeriesShot() {
     duration: Number(previous?.duration) || 10,
     seed: nextSeed.toString(),
     sceneReference: null,
+    omitSharedImageLabels: isWorldTravel() ? [...WORLD_TRAVEL_OPENING_ONLY_REFERENCES] : [],
   });
   renderSeriesShots();
   saveSeriesDraftSoon();
@@ -1722,6 +1805,9 @@ function duplicateSeriesShot(index) {
     title: `${source.title} copy`,
     seed: nextSeed.toString(),
     sceneReference: source.sceneReference ? { ...source.sceneReference, metadata: { ...(source.sceneReference.metadata || {}) } } : null,
+    omitSharedImageLabels: isWorldTravel() && index === 0
+      ? [...WORLD_TRAVEL_OPENING_ONLY_REFERENCES]
+      : [...(source.omitSharedImageLabels || [])],
   });
   renderSeriesShots();
   saveSeriesDraftSoon();
@@ -1754,11 +1840,17 @@ function seriesBlockingStatus(status) {
 function seriesReferenceMapForShot(shotIndex) {
   const pictureLabels = [];
   if (isWorldTravel()) {
-    state.series.canonical.slice(0, WORLD_TRAVEL_REFERENCES.length).forEach((asset, index) => {
-      if (asset) pictureLabels.push([index + 1, WORLD_TRAVEL_REFERENCES[index][0]]);
-    });
     const shot = state.series.shots[shotIndex];
-    if (shot?.sceneReference) pictureLabels.push([8, sceneReferenceLabel(shot, shotIndex)]);
+    const omitted = new Set(worldTravelOmissionsForShot(shot, shotIndex));
+    let physicalSlot = 0;
+    state.series.canonical.slice(0, WORLD_TRAVEL_REFERENCES.length).forEach((asset, index) => {
+      const label = WORLD_TRAVEL_REFERENCES[index][0];
+      if (asset && !omitted.has(label)) pictureLabels.push([++physicalSlot, label, index + 1]);
+    });
+    if (shot?.sceneReference) pictureLabels.push([++physicalSlot, sceneReferenceLabel(shot, shotIndex), 8]);
+    if (shotIndex > 0 && Number(elements.seriesContinuity.value)) {
+      pictureLabels.push([++physicalSlot, "previous shot's exact final frame", 9]);
+    }
   } else {
     const sequential = [];
     state.series.canonical.slice(0, seriesReferenceLabels().length).forEach((asset, index) => {
@@ -1775,11 +1867,14 @@ function seriesReferenceMapForShot(shotIndex) {
   });
   const continuitySeconds = Number(elements.seriesContinuity.value);
   if (shotIndex > 0 && continuitySeconds) {
-    pictureLabels.push([isWorldTravel() ? 9 : pictureLabels.length + 1, "previous shot's exact final frame"]);
+    if (!isWorldTravel()) pictureLabels.push([pictureLabels.length + 1, "previous shot's exact final frame"]);
     videos.push([`previous shot's final ${continuitySeconds} seconds`, "stereo audio from the previous shot continuity tail"]);
   }
 
-  const labels = pictureLabels.map(([ordinal, label]) => `<Picture ${ordinal}> = ${label}`);
+  const labels = pictureLabels.map(([ordinal, label, logicalOrdinal = ordinal]) => {
+    const authored = logicalOrdinal === ordinal ? "" : ` · authored <Picture ${logicalOrdinal}>`;
+    return `<Picture ${ordinal}> = ${label}${authored}`;
+  });
   let audioIndex = 1;
   videos.forEach(([videoLabel, audioLabel], index) => {
     if (audioLabel) labels.push(`<Audio ${audioIndex++}> = ${audioLabel}`);
@@ -1820,7 +1915,10 @@ function composedSeriesPromptLength(shot, shotIndex) {
   if (state.series.template === "lalachan") {
     guidance = "LALACHAN series continuity: keep every named character's species, human face, costume, scale, voice and relationships exact across shots. Use natural Chinese dialogue and clear screen direction; do not add, merge, duplicate or replace cast members.";
   } else if (isWorldTravel()) {
-    guidance = "LALACHAN World Travel continuity: lock every named character's identity, species, human face, body scale, wardrobe, accessories, relationships and voice across the whole journey. Keep the stated travel route, geography, screen direction, time progression and carried props coherent. Pictures 1-7 are shared identity and series-style anchors only. Picture 8 is the location, architecture, terrain, light and atmosphere anchor for this shot only; do not carry its place-specific details into another destination. Any earlier-episode, video or audio reference may guide character appearance or voice timbre only: never copy its country, plot, story direction, actions, blocking, landmarks or visual composition. Use natural concise dialogue and let one motivated journey connect the history and sights instead of presenting an unrelated tourist checklist.";
+    const pictureGuidance = worldTravelOmissionsForShot(shot, shotIndex).length
+      ? "Shared pictures present in the effective map are identity and series-style anchors only. The shot-specific location picture controls location, architecture, terrain, light and atmosphere for this shot only."
+      : "Pictures 1-7 are shared identity and series-style anchors only. Picture 8 controls location, architecture, terrain, light and atmosphere for this shot only.";
+    guidance = `LALACHAN World Travel continuity: lock every named character's identity, species, human face, body scale, wardrobe, accessories, relationships and voice across the whole journey. Keep the stated travel route, geography, screen direction and time progression coherent. ${pictureGuidance} Do not carry its place-specific details into another destination. Any earlier-episode, video or audio reference may guide character appearance or voice timbre only: never copy its country, plot, story direction, actions, blocking, landmarks or visual composition. Use natural concise dialogue and let one motivated journey connect the history and sights instead of presenting an unrelated tourist checklist.`;
   } else {
     guidance = "Movie continuity: preserve cast identity, wardrobe, props, geography, lighting direction, voices and the previous shot's final action.";
   }
@@ -1851,8 +1949,9 @@ function unresolvedSeriesPromptTags() {
     };
     const worldPictures = new Set();
     if (isWorldTravel()) {
+      const omitted = new Set(worldTravelOmissionsForShot(shot, shotIndex));
       state.series.canonical.slice(0, WORLD_TRAVEL_REFERENCES.length).forEach((asset, index) => {
-        if (asset) worldPictures.add(index + 1);
+        if (asset && !omitted.has(WORLD_TRAVEL_REFERENCES[index][0])) worldPictures.add(index + 1);
       });
       if (shot.sceneReference) worldPictures.add(8);
       if (hasContinuity) worldPictures.add(9);
@@ -1915,7 +2014,7 @@ function seriesDraftChecks() {
 
   const unresolvedTags = unresolvedSeriesPromptTags();
   if (unresolvedTags.length) {
-    add("error", "Some prompt tags have no reference", `${unresolvedTags.slice(0, 3).join(" · ")}${unresolvedTags.length > 3 ? ` · plus ${unresolvedTags.length - 3} more` : ""}. Upload the matching references or edit those tags.`);
+    add("error", "Some prompt tags have no effective reference", `${unresolvedTags.slice(0, 3).join(" · ")}${unresolvedTags.length > 3 ? ` · plus ${unresolvedTags.length - 3} more` : ""}. Upload the match, keep an intentionally used opening reference, or edit the tag before GPU work starts.`);
   }
   const unstableAudio = unstableSeriesAudioTags();
   if (unstableAudio.length) {
@@ -1928,6 +2027,14 @@ function seriesDraftChecks() {
     add(canonicalReady === WORLD_TRAVEL_REFERENCES.length ? "ok" : "error",
       canonicalReady === WORLD_TRAVEL_REFERENCES.length ? "World Travel identity set is complete" : `${WORLD_TRAVEL_REFERENCES.length - canonicalReady} shared P1–P7 reference${WORLD_TRAVEL_REFERENCES.length - canonicalReady === 1 ? " is" : "s are"} missing`,
       "The seven canonical slots keep characters, recurring props, and series style stable without steering the destination story.");
+    const laterPolicies = state.series.shots.slice(1).map((shot, offset) => worldTravelOmissionsForShot(shot, offset + 1));
+    const fullyScoped = laterPolicies.filter((labels) => labels.length === WORLD_TRAVEL_OPENING_ONLY_REFERENCES.length).length;
+    const keptOpeningRefs = laterPolicies.length - fullyScoped;
+    add(keptOpeningRefs ? "warn" : "ok",
+      keptOpeningRefs ? `${keptOpeningRefs} later shot${keptOpeningRefs === 1 ? " keeps" : "s keep"} an opening-only picture` : "Later shots exclude opening-only pictures",
+      keptOpeningRefs
+        ? "This is allowed for deliberate prop use. Check each shot's effective H3 map so the words card, glasses, or notebook cannot pull a later scene back toward the opening."
+        : "Words card, LightMind glasses, and Patchwork notebook are removed after Shot 1; Robot and all three travelers remain in every shot.");
     const sceneReady = seriesReadySceneCount();
     add(sceneReady === state.series.shots.length ? "ok" : "error",
       sceneReady === state.series.shots.length ? `All ${sceneReady} shot-specific P8 plates are ready` : `${state.series.shots.length - sceneReady} shot-specific P8 plate${state.series.shots.length - sceneReady === 1 ? " is" : "s are"} missing`,
@@ -2099,6 +2206,7 @@ function seriesPayload() {
           token: shot.sceneReference?.token || "",
           label: sceneReferenceLabel(shot, index),
         },
+        omit_shared_image_labels: worldTravelOmissionsForShot(shot, index),
       } : {}),
     })),
   };

@@ -157,6 +157,10 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         policy = config["series"]["shot_reference_policy"]
         self.assertEqual(policy["field"], "omit_shared_image_labels")
         self.assertTrue(policy["logical_picture_tags_remapped"])
+        self.assertEqual(
+            policy["recommended_omissions_after_first"],
+            ["Words card", "LightMind glasses", "Patchwork notebook"],
+        )
         self.assertIn("paused", policy["editable_states"])
         capability = config["series"]["capabilities"]["world_travel"]
         self.assertEqual(capability["template"], "world_travel")
@@ -294,6 +298,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('api("/api/uploads/validate"', script)
         self.assertIn("brief: elements.seriesBrief.value.trim()", script)
         self.assertIn('scene_reference: {', script)
+        self.assertIn('omit_shared_image_labels: worldTravelOmissionsForShot', script)
+        self.assertIn('strong.textContent = "Opening-only reference guard"', script)
         self.assertIn('template === "world_travel"', script)
         self.assertIn("previous shot's exact final frame", script)
         self.assertIn("/retry-finalization", script)

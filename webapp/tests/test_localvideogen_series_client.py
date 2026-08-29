@@ -19,6 +19,7 @@ from scripts.localvideogen_series import (
     SeriesClientError,
     SeriesTransportError,
     WAIT_MODES,
+    WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS,
     WORLD_TRAVEL_REFERENCE_LABELS,
     _install_temporary,
     build_parser,
@@ -511,6 +512,197 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
         invalid["shots"][1]["omit_shared_image_labels"] = ["Aya Chan"]
         with self.assertRaisesRegex(SeriesClientError, "persistent cast"):
             client.preflight_series_spec(invalid)
+
+    def test_world_travel_defaults_and_preflights_effective_picture_layout(
+        self,
+    ) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Florence",
+                "prompt": "Continue through <Picture 8> from <Picture 9>.",
+                "duration": 10,
+                "scene_reference": {
+                    "token": "florence-token",
+                    "label": "Florence",
+                },
+            }
+        )
+        original = copy.deepcopy(spec)
+        client = PreparationClient()
+
+        report = client.preflight_series_spec(spec)
+
+        self.assertEqual(spec, original)
+        second = report["effective_picture_layouts"][1]
+        self.assertEqual(
+            second["omit_shared_image_labels"],
+            list(WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS),
+        )
+        self.assertEqual(
+            [item["label"] for item in second["effective_pictures"]],
+            [
+                "Zhuangzi Robot",
+                "Rara Xia",
+                "Aya Chan",
+                "Sasa Kun",
+                "Florence",
+                "previous shot's exact final frame",
+            ],
+        )
+        self.assertEqual(
+            [
+                (item["logical_slot"], item["physical_slot"])
+                for item in second["effective_pictures"]
+            ],
+            [(2, 1), (5, 2), (6, 3), (7, 4), (8, 5), (9, 6)],
+        )
+
+        payload = client.prepare_series_payload(spec)
+        self.assertEqual(
+            payload["shots"][1]["omit_shared_image_labels"],
+            list(WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS),
+        )
+        self.assertEqual(spec, original)
+
+    def test_world_travel_explicit_keep_all_override_is_preserved(self) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Closing card",
+                "prompt": "Use <Picture 1> at <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"token": "closing-token", "label": "Closing"},
+                "omit_shared_image_labels": [],
+            }
+        )
+        client = PreparationClient()
+
+        report = client.preflight_series_spec(spec)
+        self.assertEqual(
+            report["effective_picture_layouts"][1][
+                "omit_shared_image_labels"
+            ],
+            [],
+        )
+        payload = client.prepare_series_payload(spec)
+        self.assertEqual(payload["shots"][1]["omit_shared_image_labels"], [])
+
+    def test_direct_token_create_materializes_later_shot_defaults(self) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Later",
+                "prompt": "Continue at <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"token": "later-token", "label": "Later"},
+            }
+        )
+        original = copy.deepcopy(spec)
+        client = RoutingClient()
+
+        client.create_series(spec)
+
+        create = next(
+            call
+            for call in client.calls
+            if call[0] == "POST" and call[1] == "/api/series"
+        )
+        self.assertEqual(
+            create[2]["shots"][1]["omit_shared_image_labels"],
+            list(WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS),
+        )
+        self.assertEqual(spec, original)
+
+    def test_world_travel_omitted_authored_tag_fails_before_upload(self) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Unsafe repeat",
+                "prompt": "Show <Picture 1> again beside <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"token": "later-token", "label": "Later"},
+            }
+        )
+        client = PreparationClient()
+
+        with self.assertRaisesRegex(
+            SeriesClientError, "effective reference policy omits Words card"
+        ):
+            client.prepare_series_payload(spec)
+        self.assertEqual(client.uploaded, [])
+
+    def test_world_travel_omission_preflight_canonicalizes_label_whitespace(
+        self,
+    ) -> None:
+        spec = token_world_travel_spec()
+        spec["shots"].append(
+            {
+                "title": "Unsafe padded omission",
+                "prompt": "Show <Picture 1> again beside <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"token": "later-token", "label": "Later"},
+                "omit_shared_image_labels": [" Words card "],
+            }
+        )
+        client = PreparationClient()
+
+        with self.assertRaisesRegex(
+            SeriesClientError, "effective reference policy omits Words card"
+        ):
+            client.prepare_series_payload(spec)
+        self.assertEqual(client.uploaded, [])
+
+    def test_world_travel_string_zero_disables_continuity_in_preflight(self) -> None:
+        spec = token_world_travel_spec()
+        spec["settings"]["continuity_seconds"] = "0"
+        spec["shots"].append(
+            {
+                "title": "Independent second shot",
+                "prompt": "Continue at <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"token": "later-token", "label": "Later"},
+            }
+        )
+        client = PreparationClient()
+
+        report = client.preflight_series_spec(spec)
+
+        self.assertNotIn(
+            "previous shot's exact final frame",
+            [
+                item["label"]
+                for item in report["effective_picture_layouts"][1][
+                    "effective_pictures"
+                ]
+            ],
+        )
+
+    def test_start_preflights_durable_effective_references_before_post(self) -> None:
+        series = token_world_travel_spec()
+        series.update(id=SERIES_ID, status="ready")
+        series["shots"].append(
+            {
+                "title": "Later",
+                "prompt": "Accidentally repeat <Picture 1> at <Picture 8>.",
+                "duration": 10,
+                "scene_reference": {"kind": "image", "label": "Later"},
+                "omit_shared_image_labels": ["Words card"],
+            }
+        )
+        client = RoutingClient()
+        client.states = [series]
+
+        with self.assertRaisesRegex(
+            SeriesClientError, "effective reference policy omits Words card"
+        ):
+            client.start_series(SERIES_ID)
+        self.assertFalse(
+            any(
+                method == "POST" and path.endswith("/start")
+                for method, path, _payload, _query in client.calls
+            )
+        )
 
     def test_video_soundtrack_source_is_uploaded_as_an_audio_handle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

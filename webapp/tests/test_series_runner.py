@@ -362,6 +362,13 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         input_root = Path(self.temporary.name) / "input"
         document, payload, resolve = self.world_document(input_root)
+        payload["brief"] += (
+            " The physical words card appears in the notebook only during the opening."
+        )
+        payload["shots"][1]["prompt"] += (
+            " Exactly four friends remain; card and notebook stay off-camera. "
+            "No subtitles, card, notebook, duplicate cast, or montage."
+        )
         payload["shots"][1]["omit_shared_image_labels"] = [
             "Words card",
             "LightMind glasses",
@@ -406,7 +413,45 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<Picture 8>", prompt)
         for omitted in ("Words card", "LightMind glasses", "Patchwork notebook"):
             self.assertNotIn(omitted, prompt)
+        for omitted_term in (r"\bwords card\b", r"\bcard\b", r"\bnotebook\b"):
+            self.assertNotRegex(prompt.lower(), omitted_term)
+        self.assertIn("Exactly four friends remain", prompt)
+        self.assertIn("No subtitles, duplicate cast, or montage", prompt)
+        self.assertIn("within the first second", prompt)
         self.assertIn("shot-specific location picture", prompt)
+
+    async def test_opening_prop_scrub_preserves_negative_grammar_and_story(self) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        _, payload, resolve = self.world_document(input_root)
+        payload["brief"] = "Match the route and let the friends raise glasses together."
+        payload["shots"][1]["prompt"] = (
+            "Match the Deosai meadow, and keep the notebook off-camera. "
+            "No card, notebook, subtitles, duplicate cast, or montage. "
+            "Do not show the card, labels, or extra people."
+        )
+        payload["shots"][1]["omit_shared_image_labels"] = [
+            "Words card",
+            "LightMind glasses",
+            "Patchwork notebook",
+        ]
+        document = build_series_document(payload, resolve)
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        _, _, labels = self.runner._references_for_shot(document, 1)
+
+        prompt = self.runner._series_prompt(document, 1, labels)
+
+        self.assertIn("Match the Deosai meadow", prompt)
+        self.assertIn("raise glasses together", prompt)
+        self.assertIn("No subtitles, duplicate cast, or montage", prompt)
+        self.assertIn("Do not show labels, or extra people", prompt)
+        self.assertNotRegex(prompt.lower(), r"\b(?:card|notebook)\b")
 
     async def test_reference_policy_preserves_attempt_history_and_cast_refs(
         self,

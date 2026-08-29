@@ -58,6 +58,7 @@
         "source": "references/scenes/scene-01-rome-colosseum-dawn.png",
         "label": "Rome — Colosseum at dawn"
       },
+      "omit_shared_image_labels": [],
       "prompt": "One continuous stable cinematic tracking shot in 4:3. Match <Picture 8> exactly for the dawn Colosseum exterior, authentic Roman stone, arch scale, road direction and warm natural light; exclude Florence, Venice and Iran. At 0–2s the four friends walk from lower left toward the right foreground; wind opens Aya's patchwork notebook, its physical <Picture 1> HERITAGE card slips halfway out, and Sasa catches it naturally. At 2–6s Rara looks up at the immense arches and says clearly: ‘这么大的圆圈，真能坐满吗？’ At 6–9s Aya waits until he finishes, points to the stone road toward the Roman Forum and answers: ‘能。可罗马人不只来看比赛。’ At 9–10s all four keep the same forward screen direction toward a centered arch; camera lowers toward the stone road and holds the arch as an explicit transition path. Speak only those two lines with accurate Mandarin lip sync. Native stereo: light wind, sparse morning footsteps, distant modern city and soft paper; restrained original music below speech. No subtitles, narration, historical reconstruction montage, duplicate cast or extra protagonist."
     },
     {
@@ -68,6 +69,9 @@
         "source": "references/scenes/scene-02-roman-forum.png",
         "label": "Rome — Roman Forum and Via Sacra"
       },
+      "omit_shared_image_labels": [
+        "Words card"
+      ],
       "prompt": "Continue the exact forward step and centered stone passage from the preceding continuity tail without replaying Colosseum dialogue. Match <Picture 8> for the Roman Forum road, columns, temple layers, spatial geography and morning light, with no Florence dome, Venice canal or Iran imagery. At 0–3s a stable low tracking camera follows the old stone road; Sasa watches the flow and asks: ‘原来这里也会堵？’ At 3–7s Zhuangzi replies in calm everyday Mandarin: ‘会。开会、买卖、听消息，都挤在这里。’ Show only the visible road and ruins, not transparent ancient people or an exposition montage. At 7–9s Rara smiles and says: ‘两千年前也赶集啊。’ At 9–10s wind turns one notebook page; LightMind glasses draw only a single simple wordless dome outline centered in frame for the Florence transition. Speak only those three lines. Preserve the music motif and add stone footsteps, light wind, distant city and paper. No subtitles, narration, battle, crowd swarm, UI or duplicate character."
     },
     {
@@ -78,6 +82,10 @@
         "source": "references/scenes/scene-03-florence-duomo.png",
         "label": "Florence — Cathedral and Brunelleschi's dome"
       },
+      "omit_shared_image_labels": [
+        "Words card",
+        "LightMind glasses"
+      ],
       "prompt": "Continue seamlessly from the prior dome outline and forward movement: make one clean match transition from that outline to the authentic terracotta dome in <Picture 8>, then remove the overlay. Match <Picture 8> for Florence street scale, cathedral exterior, Tuscan morning light and geography; exclude Rome, Venice and Iran. At 0–3s a stable medium-wide camera rises from the narrow street to the dome; Sasa asks: ‘这么大的圆顶，底下没柱子？’ At 3–6s Zhuangzi waits and answers: ‘没有。1436年，它已经站稳了。’ At 6–9s Aya draws one dome arc in the notebook and says: ‘这股新风，后来叫文艺复兴。’ At 9–10s camera moves close to the single pencil arc as it drops toward the Arno direction and ends on water reflection plus a bridge-arch shape for the next match. Speak only those three lines with clear Mandarin and accurate lip sync. Native stereo includes footsteps, a distant bell, pencil on paper and the same low music motif. No subtitles, narration, construction animation, floating formulas, famous-artist replicas or extra cast."
     },
     {
@@ -88,6 +96,11 @@
         "source": "references/scenes/scene-04-florence-uffizi-ponte-vecchio.png",
         "label": "Florence — Uffizi, Arno and Ponte Vecchio"
       },
+      "omit_shared_image_labels": [
+        "Words card",
+        "LightMind glasses",
+        "Patchwork notebook"
+      ],
       "prompt": "Continue the preceding pencil arc, bridge shape, water reflection and forward action without restarting. Enter <Picture 8> naturally and match its Uffizi colonnade, Arno, Ponte Vecchio proportions, warm afternoon stone and geographic relationship; exclude Venice canals, Rome ruins and Iran. At 0–4s one stable side tracking shot follows the friends from the Uffizi colonnade toward the river; Rara asks: ‘“乌菲兹”不是“办公室”吗？’ At 4–7s Aya answers naturally: ‘从前是。现在，名作住进来了。’ Do not show or imitate any specific painting. At 7–9s Sasa looks at the still-busy Ponte Vecchio and jokes: ‘那座桥也没下班！’ At 9–10s they laugh and approach the Arno; camera lowers until one continuous river reflection fills frame and keeps the same travel direction for Venice. Speak only those three lines. Native stereo: colonnade footsteps, soft river, distant people and the same restrained music. No subtitles, museum signs, painting montage, random interior cut, crowded tourists or duplicate characters."
     },
     {
@@ -98,6 +111,10 @@
         "source": "references/scenes/scene-05-venice-san-marco-basin.png",
         "label": "Venice — St Mark's Basin and Doge's Palace"
       },
+      "omit_shared_image_labels": [
+        "LightMind glasses",
+        "Patchwork notebook"
+      ],
       "prompt": "Continue the Arno reflection from the preceding tail and naturally broaden the same moving water into <Picture 8>, not a new tourism commercial. Match <Picture 8> for St Mark's Basin, bell tower, Doge's Palace, waterfront, lagoon scale, ordinary vaporetto and late-afternoon light; exclude Florence, Rome and Iran. The same four friends ride one normal public water bus. At 0–3s stable onboard framing keeps architecture visible but secondary; wind lifts the physical card and Sasa holds it while asking: ‘怎么走着走着就上船了？’ At 3–7s Zhuangzi replies: ‘这里有118座岛，水路也是路。’ At 7–9s Aya looks across the lagoon and says: ‘威尼斯就这样走向了海上。’ At 9–10s camera follows the wake downward until one round ripple fills frame for a plate-shaped match transition. Speak only those three lines. Native stereo: quiet boat motor, water on hull, breeze, distant bell and the same original low music, never Iran music. No subtitles, narration, fantasy gondola parade, carnival masks, tourist swarm or extra protagonist."
     },
     {
@@ -108,6 +125,7 @@
         "source": "references/scenes/scene-06-venice-bacaro-blue-hour.png",
         "label": "Venice — canalside bacaro at blue hour"
       },
+      "omit_shared_image_labels": [],
       "prompt": "Continue the preceding round water ripple and match it cleanly to the curve of a small cicchetti plate in <Picture 8>; continue the same evening into blue hour. Match <Picture 8> for the intimate canalside Venetian bacaro, narrow canal, old walls, warm indoor light, modest authentic snacks and believable furniture. The same four friends sit with robot, notebook, glasses and physical words card visible. At 0–3s the notebook shows simple picture sketches of Rome, Florence and Venice joined by one route; Rara asks: ‘什么时候才有一个意大利？’ At 3–7s Zhuangzi answers: ‘1861年王国成立；十年后，罗马成了首都。’ At 7–9s Aya clips the physical <Picture 1> card into the last page, traces the street, bridge and water sketches, and says: ‘可这一页还在写。’ At 9–10s Zhuangzi presses the camera shutter while Sasa silently steals the last snack; hold a stable warm group composition. Speak only those three lines and finish speech before the shutter. Native stereo: gentle canal, distant dishes, paper, camera shutter and the music motif resolving naturally. No subtitles, narration, intoxication, duplicate cast, extra protagonist, floating logo or sequel text."
     }
   ]

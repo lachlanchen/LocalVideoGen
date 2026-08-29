@@ -51,6 +51,23 @@ WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS = frozenset(
         "Sasa Kun",
     }
 )
+WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS = (
+    "Words card",
+    "LightMind glasses",
+    "Patchwork notebook",
+)
+WORLD_TRAVEL_OPENING_PROP_PATTERNS = {
+    "Words card": re.compile(r"\b(?:words?\s+card|glacier\s+card)\b|(?:单词卡|词卡)", re.IGNORECASE),
+    "LightMind glasses": re.compile(r"\blightmind(?:\s+glasses)?\b|轻智眼镜", re.IGNORECASE),
+    "Patchwork notebook": re.compile(r"\b(?:patchwork\s+notebook|notebook)\b|笔记本", re.IGNORECASE),
+}
+WORLD_TRAVEL_OPENING_PROP_LIST_PATTERNS = {
+    **WORLD_TRAVEL_OPENING_PROP_PATTERNS,
+    "Words card": re.compile(
+        r"\b(?:words?\s+card|glacier\s+card|card)\b|(?:单词卡|词卡|卡片)",
+        re.IGNORECASE,
+    ),
+}
 REFERENCE_POLICY_STATES = frozenset(
     {"ready", "paused", "failed", "cancelled", "completed"}
 )
@@ -370,6 +387,11 @@ def _compose_series_prompt(
             " Continue directly and seamlessly from the previous-shot reference tail; "
             "do not replay its completed action."
         )
+        if document["template"] == "world_travel":
+            continuity += (
+                " Complete the match into this shot's location within the first second; "
+                "from one second onward, show only the current location and this shot's new action."
+            )
     reference_map = "\nReference map:\n" + "\n".join(labels) if labels else ""
     _, picture_tag_map = _picture_reference_layout(
         document["references"],
@@ -383,10 +405,18 @@ def _compose_series_prompt(
             shot_index > 0 and bool(document["settings"]["continuity_seconds"])
         ),
     )
-    remapped_brief = _remap_picture_tags(
-        str(document.get("brief") or ""), picture_tag_map
-    )
-    remapped_prompt = _remap_picture_tags(str(shot["prompt"]), picture_tag_map)
+    authored_brief = str(document.get("brief") or "")
+    authored_prompt = str(shot["prompt"])
+    if document["template"] == "world_travel":
+        omitted_labels = shot.get("omit_shared_image_labels") or []
+        authored_brief = _without_omitted_opening_prop_mentions(
+            authored_brief, omitted_labels
+        )
+        authored_prompt = _without_omitted_opening_prop_mentions(
+            authored_prompt, omitted_labels
+        )
+    remapped_brief = _remap_picture_tags(authored_brief, picture_tag_map)
+    remapped_prompt = _remap_picture_tags(authored_prompt, picture_tag_map)
     brief = (
         f"\nSilent series context, never speak or display: {remapped_brief}"
         if remapped_brief
@@ -403,6 +433,93 @@ def _compose_series_prompt(
         "in the authored shot direction.\n"
         f"{guidance}{continuity}{target}{brief}{reference_map}\n\n{remapped_prompt}"
     )
+
+
+def _without_omitted_opening_prop_mentions(
+    text: str, omitted_labels: Sequence[str]
+) -> str:
+    """Keep omitted opening props out of H3's positive-language conditioning.
+
+    Negative instructions such as "no notebook" can still cause a generative
+    model to reconstruct that object.  When an opening-only World Travel image
+    is physically absent, remove matching prose clauses as well.  Comma-based
+    ``No ...`` lists retain their unrelated safeguards.
+    """
+
+    strong_patterns = [
+        WORLD_TRAVEL_OPENING_PROP_PATTERNS[label]
+        for label in omitted_labels
+        if label in WORLD_TRAVEL_OPENING_PROP_PATTERNS
+    ]
+    list_patterns = [
+        WORLD_TRAVEL_OPENING_PROP_LIST_PATTERNS[label]
+        for label in omitted_labels
+        if label in WORLD_TRAVEL_OPENING_PROP_LIST_PATTERNS
+    ]
+    if not text or not strong_patterns:
+        return text
+
+    def mentions_prop(fragment: str, patterns: Sequence[re.Pattern[str]]) -> bool:
+        return any(pattern.search(fragment) for pattern in patterns)
+
+    exclusion_prefix = re.compile(
+        r"^(?P<prefix>\s*(?:no|do\s+not\s+(?:show|include|display)|"
+        r"never\s+(?:show|include|display))\s+)",
+        re.IGNORECASE,
+    )
+    exclusion_state = re.compile(
+        r"\b(?:off[ -]?camera|out\s+of\s+(?:frame|view)|absent|hidden|"
+        r"never\s+returns?|do\s+not\s+returns?)\b",
+        re.IGNORECASE,
+    )
+    opening_history = re.compile(
+        r"\b(?:opening|shot\s*1|first\s+shot)\b", re.IGNORECASE
+    )
+
+    cleaned_sentences: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if not sentence:
+            continue
+        terminal = sentence[-1] if sentence[-1:] in {".", "!", "?"} else ""
+        kept_clauses: list[str] = []
+        for clause in re.split(r";\s*", sentence):
+            prefix_match = exclusion_prefix.match(clause)
+            if prefix_match:
+                body = clause[prefix_match.end() :]
+                retained = [
+                    part.strip()
+                    for part in body.split(",")
+                    if not mentions_prop(part, list_patterns)
+                ]
+                if retained:
+                    retained[0] = re.sub(
+                        r"^(?:and|or)\s+", "", retained[0], flags=re.IGNORECASE
+                    )
+                    kept_clauses.append(
+                        prefix_match.group("prefix").strip() + " " + ", ".join(retained)
+                    )
+                continue
+
+            subclauses = re.split(r",\s+and\s+", clause)
+            retained_subclauses: list[str] = []
+            for subclause in subclauses:
+                has_prop = mentions_prop(subclause, strong_patterns)
+                is_prop_only_direction = has_prop and (
+                    exclusion_state.search(subclause)
+                    or opening_history.search(subclause)
+                )
+                if not is_prop_only_direction:
+                    retained_subclauses.append(subclause.strip())
+            if retained_subclauses:
+                kept_clauses.append(", and ".join(retained_subclauses))
+            elif not mentions_prop(clause, strong_patterns):
+                kept_clauses.append(clause.strip())
+        cleaned = "; ".join(part for part in kept_clauses if part).strip()
+        if cleaned:
+            if terminal and cleaned[-1:] not in {".", "!", "?"}:
+                cleaned += terminal
+            cleaned_sentences.append(cleaned)
+    return " ".join(cleaned_sentences)
 
 
 def build_series_document(

@@ -9,11 +9,13 @@ opaque handles, validated, and removed from the durable API payload.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import http.client
 import json
 import mimetypes
 import os
+import re
 import secrets
 import stat
 import sys
@@ -67,6 +69,14 @@ WORLD_TRAVEL_REFERENCE_LABELS = (
 )
 WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS = frozenset(
     {"Zhuangzi Robot", "Rara Xia", "Aya Chan", "Sasa Kun"}
+)
+WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS = (
+    "Words card",
+    "LightMind glasses",
+    "Patchwork notebook",
+)
+REFERENCE_TAG_PATTERN = re.compile(
+    r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE
 )
 
 
@@ -172,6 +182,150 @@ def _validate_spec_image_omissions(spec: Mapping[str, Any]) -> bool:
                 )
         used = used or bool(labels)
     return used
+
+
+def _with_world_travel_omission_defaults(
+    spec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Copy a spec and scope opening-only pictures on future travel shots.
+
+    An explicit list, including an empty one, is always retained.  This keeps
+    intentional prop use editable while making the safer behavior the default
+    for supported client-created World Travel series.  Server-side durable
+    records are never rewritten by this helper.
+    """
+
+    if not isinstance(spec, Mapping):
+        raise SeriesClientError("series spec must be a JSON object")
+    result = copy.deepcopy(dict(spec))
+    if result.get("template") != "world_travel":
+        return result
+    shots = result.get("shots")
+    if not isinstance(shots, list):
+        return result
+    for index, shot in enumerate(shots):
+        if (
+            index > 0
+            and isinstance(shot, dict)
+            and "omit_shared_image_labels" not in shot
+        ):
+            shot["omit_shared_image_labels"] = list(
+                WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS
+            )
+    return result
+
+
+def _world_travel_effective_picture_layouts(
+    spec: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Preflight authored logical tags against each compact H3 image list."""
+
+    references = spec.get("references")
+    shots = spec.get("shots")
+    settings = spec.get("settings") or {}
+    if not isinstance(references, Mapping) or not isinstance(shots, list):
+        return []
+    images = references.get("images")
+    if not isinstance(images, list):
+        return []
+    raw_continuity = (
+        settings.get("continuity_seconds", 3)
+        if isinstance(settings, Mapping)
+        else 3
+    )
+    if isinstance(raw_continuity, bool):
+        raise SeriesClientError("continuity_seconds must be an integer")
+    try:
+        continuity_seconds = int(raw_continuity)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SeriesClientError("continuity_seconds must be an integer") from exc
+    if isinstance(raw_continuity, float) and raw_continuity != continuity_seconds:
+        raise SeriesClientError("continuity_seconds must be an integer")
+    if continuity_seconds not in {0, 2, 3, 4}:
+        raise SeriesClientError("continuity_seconds must be 0, 2, 3, or 4")
+    continuity = bool(continuity_seconds)
+    brief = str(spec.get("brief") or "")
+    layouts: list[dict[str, Any]] = []
+    for index, shot in enumerate(shots):
+        if not isinstance(shot, Mapping):
+            continue
+        omitted_labels = [
+            str(label).strip()
+            for label in (shot.get("omit_shared_image_labels") or [])
+        ]
+        omitted = set(omitted_labels)
+        effective: list[dict[str, Any]] = []
+        logical_to_physical: dict[int, int] = {}
+        for logical_slot, item in enumerate(images, start=1):
+            label = str(item.get("label") or "") if isinstance(item, Mapping) else ""
+            if label in omitted:
+                continue
+            physical_slot = len(effective) + 1
+            logical_to_physical[logical_slot] = physical_slot
+            effective.append(
+                {
+                    "logical_slot": logical_slot,
+                    "physical_slot": physical_slot,
+                    "label": label,
+                    "scope": "shared",
+                }
+            )
+        scene = shot.get("scene_reference")
+        if isinstance(scene, Mapping):
+            logical_slot = len(images) + 1
+            physical_slot = len(effective) + 1
+            logical_to_physical[logical_slot] = physical_slot
+            effective.append(
+                {
+                    "logical_slot": logical_slot,
+                    "physical_slot": physical_slot,
+                    "label": str(scene.get("label") or f"Shot {index + 1} location"),
+                    "scope": "shot",
+                }
+            )
+        if index > 0 and continuity:
+            logical_slot = len(images) + 2
+            physical_slot = len(effective) + 1
+            logical_to_physical[logical_slot] = physical_slot
+            effective.append(
+                {
+                    "logical_slot": logical_slot,
+                    "physical_slot": physical_slot,
+                    "label": "previous shot's exact final frame",
+                    "scope": "continuity",
+                }
+            )
+
+        authored = f"{brief}\n{shot.get('prompt') or ''}"
+        for match in REFERENCE_TAG_PATTERN.finditer(authored):
+            if match.group(1).lower() != "picture":
+                continue
+            logical_slot = int(match.group(2))
+            if logical_slot in logical_to_physical:
+                continue
+            omitted_label = (
+                str(images[logical_slot - 1].get("label") or "")
+                if 1 <= logical_slot <= len(images)
+                and isinstance(images[logical_slot - 1], Mapping)
+                else ""
+            )
+            if omitted_label in omitted:
+                raise SeriesClientError(
+                    f"Shot {index + 1} uses {match.group(0)} but its effective "
+                    f"reference policy omits {omitted_label}"
+                )
+            raise SeriesClientError(
+                f"Shot {index + 1} uses {match.group(0)} without a matching "
+                "effective picture reference"
+            )
+        layouts.append(
+            {
+                "index": index,
+                "omit_shared_image_labels": omitted_labels,
+                "effective_pictures": effective,
+            }
+        )
+    return layouts
 
 
 def load_series_spec(path: str | Path) -> tuple[dict[str, Any], Path]:
@@ -542,6 +696,7 @@ class LocalVideoGenClient:
 
         if not isinstance(spec, Mapping):
             raise SeriesClientError("series spec must be a JSON object")
+        effective_spec = _with_world_travel_omission_defaults(spec)
         config = self.config()
         if config.get("series_api_version") != SERIES_API_VERSION:
             raise SeriesClientError(
@@ -555,7 +710,7 @@ class LocalVideoGenClient:
             for profile in profiles
             if isinstance(profile, Mapping) and isinstance(profile.get("id"), str)
         }
-        settings = spec.get("settings") or {}
+        settings = effective_spec.get("settings") or {}
         if not isinstance(settings, Mapping):
             raise SeriesClientError("settings must be a JSON object")
         profile_id = str(settings.get("profile") or MAXIMUM_QUALITY_PROFILE)
@@ -567,13 +722,13 @@ class LocalVideoGenClient:
         series = config.get("series")
         if not isinstance(series, Mapping):
             raise SeriesClientError("server series capability contract is missing")
-        template = str(spec.get("template") or "lalachan")
+        template = str(effective_spec.get("template") or "lalachan")
         templates = series.get("templates")
         if not isinstance(templates, list) or template not in templates:
             raise SeriesClientError(
                 f"template {template!r} is not advertised by this server"
             )
-        uses_image_omissions = _validate_spec_image_omissions(spec)
+        uses_image_omissions = _validate_spec_image_omissions(effective_spec)
         if uses_image_omissions:
             policy = series.get("shot_reference_policy")
             if not isinstance(policy, Mapping) or any(
@@ -657,7 +812,7 @@ class LocalVideoGenClient:
                 raise SeriesClientError(
                     "world_travel must advertise verified predecessor final frame P9"
                 )
-            references = spec.get("references") or {}
+            references = effective_spec.get("references") or {}
             images = (
                 references.get("images") if isinstance(references, Mapping) else None
             )
@@ -668,7 +823,7 @@ class LocalVideoGenClient:
                 raise SeriesClientError(
                     "world_travel requires exactly seven shared pictures in canonical label order"
                 )
-            shots = spec.get("shots")
+            shots = effective_spec.get("shots")
             if not isinstance(shots, list) or any(
                 not isinstance(shot, Mapping)
                 or not isinstance(shot.get("scene_reference"), Mapping)
@@ -677,9 +832,14 @@ class LocalVideoGenClient:
                 raise SeriesClientError(
                     "every world-travel shot needs a scene_reference object for P8"
                 )
+            effective_picture_layouts = _world_travel_effective_picture_layouts(
+                effective_spec
+            )
+        else:
+            effective_picture_layouts = []
 
         needs_runtime = (
-            self._spec_uses_local_sources(spec)
+            self._spec_uses_local_sources(effective_spec)
             if require_runtime is None
             else require_runtime
         )
@@ -693,6 +853,7 @@ class LocalVideoGenClient:
             "template": template,
             "profile": profile_id,
             "runtime": health,
+            "effective_picture_layouts": effective_picture_layouts,
         }
 
     def upload(self, kind: str, path: str | Path) -> dict[str, Any]:
@@ -845,6 +1006,8 @@ class LocalVideoGenClient:
         settings.setdefault("continuity_seconds", 3)
         settings.setdefault("advance", True)
 
+        payload = _with_world_travel_omission_defaults(payload)
+
         raw_references = payload.get("references") or {}
         if not isinstance(raw_references, Mapping):
             raise SeriesClientError("references must be a JSON object")
@@ -988,8 +1151,9 @@ class LocalVideoGenClient:
         return payload
 
     def create_series(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        self.preflight_series_spec(payload, require_runtime=False)
-        return self._create_series(payload)
+        effective_payload = _with_world_travel_omission_defaults(payload)
+        self.preflight_series_spec(effective_payload, require_runtime=False)
+        return self._create_series(effective_payload)
 
     def _create_series(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         result = self._request_json("POST", "/api/series", payload)

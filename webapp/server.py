@@ -36,6 +36,7 @@ from .series_media import SeriesMedia, SeriesMediaError
 from .series_runner import (
     LALACHAN_REFERENCE_LABELS,
     REFERENCE_POLICY_STATES,
+    WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS,
     WORLD_TRAVEL_PERSISTENT_IMAGE_LABELS,
     SeriesRunner,
     build_series_document,
@@ -746,6 +747,9 @@ def create_app(
                 "field": "omit_shared_image_labels",
                 "logical_picture_tags_remapped": True,
                 "first_shot_must_keep_all": True,
+                "recommended_omissions_after_first": list(
+                    WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS
+                ),
                 "editable_states": sorted(REFERENCE_POLICY_STATES),
                 "endpoint": "/api/series/{series_id}/shots/{shot_index}/reference-policy",
             },
