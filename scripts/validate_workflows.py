@@ -11,6 +11,18 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_ROOT = PROJECT_ROOT / "workflows"
+TEXT_ENCODER_CONFIG = PROJECT_ROOT / "config" / "text-encoder-selection.json"
+
+
+def configured_text_encoder() -> str:
+    config = json.loads(TEXT_ENCODER_CONFIG.read_text(encoding="utf-8"))
+    filename = config["profiles"][config["active"]]["filename"]
+    if not isinstance(filename, str) or not filename.endswith(".safetensors"):
+        raise ValueError(f"invalid text encoder filename in {TEXT_ENCODER_CONFIG}")
+    return filename
+
+
+TEXT_ENCODER = configured_text_encoder()
 
 MODEL_NAMES = {
     ("fl2va", "bf16"): "minimax_h3_fl2va_pruned_bf16.safetensors",
@@ -346,6 +358,10 @@ def validate_semantics(path: Path, workflow: dict[str, Any]) -> None:
     expected_model = MODEL_NAMES[(family, precision)]
     require(loader["widgets_values_named"].get("unet_name") == expected_model, path, "wrong DiT model")
     require(effective_widget(path, workflow, graph, loader, "unet_name") == expected_model, path, "subgraph host overrides DiT model")
+
+    clip_loader = exactly_one(path, graph, "CLIPLoader")
+    require(clip_loader["widgets_values_named"].get("clip_name") == TEXT_ENCODER, path, "wrong text encoder")
+    require(effective_widget(path, workflow, graph, clip_loader, "clip_name") == TEXT_ENCODER, path, "subgraph host overrides text encoder")
 
     resolution = exactly_one(path, workflow, "ResolutionSelector")
     expected_aspect = "1:1 (Square)" if task == "i2v" else "16:9 (Widescreen)"

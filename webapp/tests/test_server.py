@@ -268,6 +268,24 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('localStorage.setItem(storageKey, preference)', script)
         self.assertIn('matchMedia("(prefers-color-scheme: dark)")', script)
 
+    async def test_studio_exposes_beginner_guide_and_session_controls(self) -> None:
+        response = await self.client.get("/")
+        self.assertEqual(response.status, 200)
+        html = await response.text()
+        for element_id in ("quickStartTitle", "newSession", "reuseSession", "jobList", "toggleSessions"):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("Make your first clip in three steps", html)
+        self.assertIn("Recent sessions", html)
+        self.assertIn("Only required field", html)
+
+        app_script = await self.client.get("/static/app.js")
+        self.assertEqual(app_script.status, 200)
+        script = await app_script.text()
+        self.assertIn("function resetSingleSession()", script)
+        self.assertIn("function reuseActiveSession()", script)
+        self.assertIn("sessionStatusLabel", script)
+        self.assertIn("state.jobs.slice(0, 6)", script)
+
     async def test_studio_exposes_the_guided_series_workspace(self) -> None:
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
@@ -378,7 +396,10 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
 
         history = await self.client.get("/api/jobs?scope=all&limit=24")
         self.assertEqual(history.status, 200)
-        self.assertEqual((await history.json())["jobs"][0]["id"], body["id"])
+        session = (await history.json())["jobs"][0]
+        self.assertEqual(session["id"], body["id"])
+        self.assertEqual(session["session"]["title"], payload["prompt"])
+        self.assertEqual(session["session"]["mode"], "t2v")
 
     async def test_series_api_keeps_upload_locations_private_and_waits_for_manual_job(self) -> None:
         source = io.BytesIO()

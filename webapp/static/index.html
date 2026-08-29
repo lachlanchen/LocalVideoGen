@@ -68,6 +68,17 @@
         </nav>
 
         <div id="singleComposer">
+        <aside class="quick-start" aria-labelledby="quickStartTitle">
+          <div>
+            <p class="eyebrow">New here?</p>
+            <h2 id="quickStartTitle">Make your first clip in three steps</h2>
+          </div>
+          <ol>
+            <li><span>1</span><strong>Choose a starting point</strong><small>Words is the easiest option.</small></li>
+            <li><span>2</span><strong>Describe what happens</strong><small>Include any sounds you want to hear.</small></li>
+            <li><span>3</span><strong>Create the video</strong><small>The recommended fast settings are ready.</small></li>
+          </ol>
+        </aside>
         <form id="renderForm" novalidate>
           <fieldset class="mode-fieldset">
             <legend class="sr-only">Generation mode</legend>
@@ -78,7 +89,7 @@
           <div class="field-group prompt-group">
             <div class="label-row">
               <label for="prompt">Scene and sound direction</label>
-              <span id="promptCount">0 / 12,000</span>
+              <span><b class="required-note">Only required field</b> · <span id="promptCount">0 / 12,000</span></span>
             </div>
             <textarea id="prompt" name="prompt" rows="8" maxlength="12000" required spellcheck="true" placeholder="Describe subject, action, camera, lighting, timing, dialogue, ambience, sound effects, and music…"></textarea>
             <div class="prompt-tools">
@@ -150,13 +161,13 @@
 
           <div class="settings-grid">
             <div class="field-group span-2">
-              <label for="profile">Quality profile</label>
+              <label for="profile">Speed &amp; quality</label>
               <select id="profile" name="profile"></select>
               <p class="field-hint" id="profileDescription"></p>
             </div>
 
             <div class="field-group span-2">
-              <label for="resolution">Canvas</label>
+              <label for="resolution">Video size</label>
               <select id="resolution" name="resolution"></select>
               <div class="dimension-row" id="customDimensions" hidden>
                 <label>Width <input id="width" name="width" type="number" min="256" max="1344" step="32" inputmode="numeric"></label>
@@ -167,30 +178,35 @@
 
             <div class="field-group span-2">
               <div class="label-row">
-                <label for="duration">Requested duration</label>
+                <label for="duration">Clip length</label>
                 <output for="duration" id="durationLabel">5.0 s</output>
               </div>
               <input id="duration" name="duration" type="range" min="5" max="15" step="0.5" value="5">
               <p class="field-hint"><span id="frameCount">124 frames</span> · <span id="actualDuration">actual 5.17 s</span> at 24 fps</p>
             </div>
 
-            <div class="field-group">
-              <label for="seed">Seed</label>
-              <div class="inline-control">
-                <input id="seed" name="seed" type="text" inputmode="numeric" value="1" pattern="[0-9]+" aria-describedby="seedHint">
-                <button class="icon-button subtle" id="randomSeed" type="button" aria-label="Choose a random seed" title="Random seed">↻</button>
-              </div>
-              <p class="field-hint" id="seedHint">Reuse a seed to revisit motion.</p>
-            </div>
+            <details class="advanced-settings span-2">
+              <summary>Advanced options <span>Use these only when you need repeatable motion or stronger reference matching.</span></summary>
+              <div class="advanced-settings-grid">
+                <div class="field-group">
+                  <label for="seed">Motion variation number</label>
+                  <div class="inline-control">
+                    <input id="seed" name="seed" type="text" inputmode="numeric" value="1" pattern="[0-9]+" aria-describedby="seedHint">
+                    <button class="icon-button subtle" id="randomSeed" type="button" aria-label="Choose a new motion variation" title="New variation">↻</button>
+                  </div>
+                  <p class="field-hint" id="seedHint">Keep this number to reproduce the same motion.</p>
+                </div>
 
-            <div class="field-group" id="identityField" hidden>
-              <label for="refImageSize">Reference fidelity</label>
-              <select id="refImageSize" name="ref_image_size">
-                <option value="match">Match canvas · faster</option>
-                <option value="max">Maximum identity · heavier</option>
-              </select>
-              <p class="field-hint">Maximum keeps larger identity tokens through every step.</p>
-            </div>
+                <div class="field-group" id="identityField" hidden>
+                  <label for="refImageSize">Reference matching</label>
+                  <select id="refImageSize" name="ref_image_size">
+                    <option value="match">Match video size · faster</option>
+                    <option value="max">Maximum identity · heavier</option>
+                  </select>
+                  <p class="field-hint">Maximum keeps more facial and object detail.</p>
+                </div>
+              </div>
+            </details>
           </div>
 
           <div class="engine-callout" id="engineCallout" hidden>
@@ -350,6 +366,7 @@
               <h2 id="viewerTitle">Your latest render</h2>
             </div>
             <div class="viewer-actions" id="viewerActions" hidden>
+              <button class="secondary-button" id="reuseSession" type="button">Reuse settings</button>
               <a class="secondary-button" id="downloadOutput" href="#" download>Download MP4</a>
             </div>
           </div>
@@ -388,17 +405,22 @@
           </div>
         </article>
 
-        <article class="history panel" aria-labelledby="historyTitle">
+        <article class="history panel" aria-labelledby="historyTitle" aria-describedby="sessionHelp">
           <div class="section-label compact">
             <div>
-              <p class="eyebrow">Queue</p>
-              <h2 id="historyTitle">Renders</h2>
+              <p class="eyebrow">Your work</p>
+              <h2 id="historyTitle">Recent sessions</h2>
+              <p class="section-help" id="sessionHelp">Every creation is saved here. Open one to watch it or reuse its settings.</p>
             </div>
-            <button class="text-button" id="refreshJobs" type="button">Refresh</button>
+            <div class="section-actions">
+              <button class="text-button" id="refreshJobs" type="button">Refresh</button>
+              <button class="secondary-button compact-button" id="newSession" type="button">New session</button>
+            </div>
           </div>
           <div class="job-list" id="jobList" aria-live="polite">
-            <p class="empty-list">No H3 renders yet.</p>
+            <p class="empty-list">No sessions yet. Describe a scene above and create your first clip.</p>
           </div>
+          <button class="session-toggle" id="toggleSessions" type="button" hidden>Show all sessions</button>
         </article>
       </section>
 

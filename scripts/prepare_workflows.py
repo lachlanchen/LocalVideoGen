@@ -11,6 +11,27 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_ROOT = PROJECT_ROOT / "workflow_templates" / "templates"
+TEXT_ENCODER_CONFIG = PROJECT_ROOT / "config" / "text-encoder-selection.json"
+
+
+def text_encoder_selection() -> tuple[str, str]:
+    config = json.loads(TEXT_ENCODER_CONFIG.read_text(encoding="utf-8"))
+    profile = config["profiles"][config["active"]]
+    filename = profile["filename"]
+    url = profile["url"]
+    if not isinstance(filename, str) or not filename.endswith(".safetensors"):
+        raise ValueError(f"invalid text encoder filename in {TEXT_ENCODER_CONFIG}")
+    if not isinstance(url, str) or not url.startswith("https://huggingface.co/"):
+        raise ValueError(f"invalid text encoder URL in {TEXT_ENCODER_CONFIG}")
+    return filename, url
+
+
+ALIGNED_TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+ALIGNED_TEXT_ENCODER_URL = (
+    "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/"
+    f"{ALIGNED_TEXT_ENCODER}"
+)
+TEXT_ENCODER, TEXT_ENCODER_URL = text_encoder_selection()
 
 TASKS = {
     "t2v": {
@@ -109,6 +130,8 @@ def configure(
     workflow = copy.deepcopy(source)
     model_name = MODEL_NAMES[(family, precision)]
     workflow = replace_strings(workflow, MODEL_NAMES[(family, "int8")], model_name)
+    workflow = replace_strings(workflow, ALIGNED_TEXT_ENCODER_URL, TEXT_ENCODER_URL)
+    workflow = replace_strings(workflow, ALIGNED_TEXT_ENCODER, TEXT_ENCODER)
 
     for node in objects(workflow):
         node_type = node.get("type")

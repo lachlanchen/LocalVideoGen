@@ -7,8 +7,10 @@ subgraphs, selector widgets, and graph-to-prompt conversion at request time.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
@@ -17,7 +19,25 @@ MAX_PIXELS = 768 * 1344
 MAX_SEED = (1 << 64) - 1
 WORKFLOW_ID = "local-video-gen-minimax-h3-webapp"
 
-TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TEXT_ENCODER_CONFIG = PROJECT_ROOT / "config" / "text-encoder-selection.json"
+TEXT_ENCODER_PROFILE_ENV = "H3_TEXT_ENCODER_PROFILE"
+
+
+def _text_encoder_selection() -> tuple[str, str]:
+    try:
+        config = json.loads(TEXT_ENCODER_CONFIG.read_text(encoding="utf-8"))
+        profiles = config["profiles"]
+        profile_name = os.environ.get(TEXT_ENCODER_PROFILE_ENV, config["active"])
+        filename = profiles[profile_name]["filename"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise RuntimeError(f"invalid text-encoder selection in {TEXT_ENCODER_CONFIG}: {error}") from error
+    if not isinstance(profile_name, str) or not isinstance(filename, str) or not filename.endswith(".safetensors"):
+        raise RuntimeError(f"invalid text-encoder selection in {TEXT_ENCODER_CONFIG}")
+    return profile_name, filename
+
+
+TEXT_ENCODER_PROFILE, TEXT_ENCODER = _text_encoder_selection()
 VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 AUX_DEVICE_ENV = "H3_AUX_DEVICE"
@@ -60,8 +80,8 @@ class Profile:
 PROFILES: dict[str, Profile] = {
     "quality_bf16_dual": Profile(
         id="quality_bf16_dual",
-        label="Maximum quality · BF16 · 2 GPUs",
-        description="Full 25-step sampling with BF16 diffusion weights. Best fidelity; slowest and heaviest.",
+        label="Best quality · slowest",
+        description="Use for a final version after you like the preview. It takes the most time and memory.",
         precision="bf16",
         dual_gpu=True,
         turbo=False,
@@ -70,8 +90,8 @@ PROFILES: dict[str, Profile] = {
     ),
     "quality_int8_dual": Profile(
         id="quality_int8_dual",
-        label="Balanced quality · INT8 · 2 GPUs",
-        description="Full 25-step sampling with lower-RAM INT8 diffusion weights.",
+        label="Balanced quality · less memory",
+        description="A good final-quality compromise when the largest option is too heavy.",
         precision="int8",
         dual_gpu=True,
         turbo=False,
@@ -80,8 +100,8 @@ PROFILES: dict[str, Profile] = {
     ),
     "preview_int8_turbo_dual": Profile(
         id="preview_int8_turbo_dual",
-        label="Fast preview · INT8 Turbo · 2 GPUs",
-        description="LightX2V Turbo LoRA: 8 steps for T2V/I2V and 4 steps for R2V. Use for drafts.",
+        label="Fast preview · recommended",
+        description="Start here. It creates a quick draft so you can check the scene before spending time on final quality.",
         precision="int8",
         dual_gpu=True,
         turbo=True,
@@ -90,8 +110,8 @@ PROFILES: dict[str, Profile] = {
     ),
     "quality_bf16_offload": Profile(
         id="quality_bf16_offload",
-        label="Maximum quality · BF16 · standard offload",
-        description="Full 25-step sampling without explicit GPU stage placement.",
+        label="Best quality · one-GPU compatible",
+        description="The slow final-quality option for a workstation where only one GPU is available.",
         precision="bf16",
         dual_gpu=False,
         turbo=False,
@@ -100,8 +120,8 @@ PROFILES: dict[str, Profile] = {
     ),
     "quality_int8_offload": Profile(
         id="quality_int8_offload",
-        label="Balanced quality · INT8 · standard offload",
-        description="Lower-RAM full sampling without explicit GPU stage placement.",
+        label="Balanced quality · one-GPU compatible",
+        description="A lower-memory final-quality option when only one GPU is available.",
         precision="int8",
         dual_gpu=False,
         turbo=False,
@@ -457,18 +477,18 @@ def public_config() -> dict[str, Any]:
         profiles.append(published)
     return {
         "modes": [
-            {"id": "t2v", "label": "Text to video", "short": "T2V", "description": "Create picture and native stereo audio from a prompt."},
-            {"id": "i2v", "label": "Image to video", "short": "I2V", "description": "Animate a first frame, with an optional final frame."},
-            {"id": "r2v", "label": "Reference to video", "short": "R2V", "description": "Guide identity, motion, style, or voice with mixed media."},
+            {"id": "t2v", "label": "Start with words", "short": "Easiest", "description": "Describe a scene and H3 creates the picture, movement, and stereo sound."},
+            {"id": "i2v", "label": "Animate a picture", "short": "One image", "description": "Upload a starting picture, then describe how it should move and sound."},
+            {"id": "r2v", "label": "Use references", "short": "Advanced", "description": "Guide a new clip with pictures, videos, voices, music, or other audio."},
         ],
         "profiles": profiles,
         "resolutions": list(RESOLUTION_PRESETS),
         "defaults": {
             "mode": "t2v",
-            "profile": "quality_bf16_dual",
-            "width": 1344,
-            "height": 768,
-            "duration": 5,
+            "profile": "preview_int8_turbo_dual",
+            "width": 864,
+            "height": 480,
+            "duration": 2,
         },
         "limits": {
             "duration_min": 5,
@@ -477,5 +497,9 @@ def public_config() -> dict[str, Any]:
             "prompt_chars": 12_000,
             "fps": FPS,
         },
-        "model": {"text_encoder": TEXT_ENCODER, "local_canvas": "768px short edge, up to 1344×768 area"},
+        "model": {
+            "text_encoder_profile": TEXT_ENCODER_PROFILE,
+            "text_encoder": TEXT_ENCODER,
+            "local_canvas": "768px short edge, up to 1344×768 area",
+        },
     }

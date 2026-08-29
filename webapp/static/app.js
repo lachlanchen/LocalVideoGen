@@ -17,6 +17,7 @@ const state = {
     ref_audios: [],
   },
   jobs: [],
+  sessionsExpanded: false,
   activeJobId: null,
   activeJob: null,
   jobTimer: null,
@@ -81,6 +82,7 @@ const elements = {
   metricModelsNote: $("#metricModelsNote"),
   lastChecked: $("#lastChecked"),
   jobList: $("#jobList"),
+  toggleSessions: $("#toggleSessions"),
   emptyStage: $("#emptyStage"),
   renderProgress: $("#renderProgress"),
   progressTitle: $("#progressTitle"),
@@ -91,6 +93,8 @@ const elements = {
   outputVideo: $("#outputVideo"),
   viewerActions: $("#viewerActions"),
   downloadOutput: $("#downloadOutput"),
+  reuseSession: $("#reuseSession"),
+  newSession: $("#newSession"),
   outputMeta: $("#outputMeta"),
   singleWorkflowTab: $("#singleWorkflowTab"),
   seriesWorkflowTab: $("#seriesWorkflowTab"),
@@ -256,9 +260,12 @@ function updateDuration() {
 function updateRenderButtonCopy() {
   const profile = selectedProfile();
   if (!profile) return;
-  const stepCount = state.mode === "r2v" ? profile.steps_ref : profile.steps_fl;
   $("span", elements.renderButton).textContent = "Create H3 video";
-  $("small", elements.renderButton).textContent = `${profile.precision.toUpperCase()} · ${stepCount} steps · ${profile.dual_gpu ? "dual stage" : "offload"}`;
+  $("small", elements.renderButton).textContent = profile.turbo
+    ? "Recommended fast preview"
+    : profile.precision === "bf16"
+      ? "Final quality · takes longer"
+      : "Balanced final quality";
 }
 
 function setupConfig(config) {
@@ -622,7 +629,9 @@ function renderHealth() {
 
   const modelState = health.model_status || (ready ? "verified" : connected ? "checking" : "unknown");
   elements.metricModels.textContent = modelState === "verified" ? "Verified" : modelState === "downloading" ? "Downloading" : modelState === "invalid" ? "Blocked" : "Checking";
-  elements.metricModelsNote.textContent = health.model_note || (ready ? "Aligned nine-file bundle" : "Aligned H3 bundle");
+  const encoderProfile = state.config?.model?.text_encoder_profile;
+  const encoderLabel = encoderProfile === "heretic" ? "Heretic text encoder selected" : "Aligned text encoder selected";
+  elements.metricModelsNote.textContent = modelState === "verified" ? encoderLabel : health.model_note || encoderLabel;
   elements.lastChecked.textContent = `Checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 
   for (const option of [...elements.profile.options]) {
@@ -794,36 +803,135 @@ function renderJobs() {
   if (!state.jobs.length) {
     const empty = document.createElement("p");
     empty.className = "empty-list";
-    empty.textContent = "No H3 renders yet.";
+    empty.textContent = "No sessions yet. Describe a scene above and create your first clip.";
     elements.jobList.append(empty);
+    elements.toggleSessions.hidden = true;
     return;
   }
-  for (const job of state.jobs) {
+  const visibleJobs = state.sessionsExpanded ? state.jobs : state.jobs.slice(0, 6);
+  for (const job of visibleJobs) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "job-card";
-    button.innerHTML = `<span class="job-state ${escapeHtml(job.status)}" aria-hidden="true"></span><span class="job-copy"><strong>${escapeHtml(job.status.replaceAll("_", " "))}</strong><small>H3 render · ${escapeHtml(job.id.slice(0, 8))}</small></span><span class="job-time">${escapeHtml(formatJobTime(job.create_time))}</span>`;
-    button.setAttribute("aria-label", `Open ${job.status.replaceAll("_", " ")} render ${job.id.slice(0, 8)}`);
+    button.className = `job-card${job.id === state.activeJobId ? " active" : ""}`;
+    const session = job.session || {};
+    const statusLabel = sessionStatusLabel(job.status);
+    const modeLabel = { t2v: "Words to video", i2v: "Animated picture", r2v: "Reference video" }[session.mode] || "H3 video";
+    const dimensions = Number(session.width) && Number(session.height) ? `${Number(session.width)}×${Number(session.height)}` : null;
+    const seconds = Number(session.duration);
+    const duration = seconds ? `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} s` : null;
+    const details = [statusLabel, modeLabel, dimensions, duration].filter(Boolean).join(" · ");
+    button.innerHTML = `<span class="job-state ${escapeHtml(job.status)}" aria-hidden="true"></span><span class="job-copy"><strong>${escapeHtml(session.title || "Untitled H3 session")}</strong><small>${escapeHtml(details)}</small></span><span class="job-time">${escapeHtml(formatJobTime(job.create_time))}</span>`;
+    button.setAttribute("aria-label", `Open ${statusLabel.toLowerCase()} session: ${session.title || job.id.slice(0, 8)}`);
     button.addEventListener("click", () => openJob(job.id));
     elements.jobList.append(button);
   }
+  elements.toggleSessions.hidden = state.jobs.length <= 6;
+  elements.toggleSessions.textContent = state.sessionsExpanded
+    ? "Show fewer sessions"
+    : `Show all ${state.jobs.length} sessions`;
+}
+
+function sessionStatusLabel(status) {
+  return {
+    completed: "Ready",
+    success: "Ready",
+    submitting: "Starting",
+    queued: "Waiting",
+    pending: "Waiting",
+    in_progress: "Creating",
+    running: "Creating",
+    cancelling: "Stopping",
+    failed: "Needs attention",
+    error: "Needs attention",
+    cancelled: "Stopped",
+  }[status] || "Saved";
 }
 
 function formatJobTime(value) {
   if (!value) return "";
   const date = new Date(Number(value));
   if (Number.isNaN(date.valueOf())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return sameDay
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 async function openJob(jobId) {
   state.activeJobId = jobId;
+  renderJobs();
   elements.emptyStage.hidden = true;
   elements.renderProgress.hidden = false;
   elements.progressTitle.textContent = "Loading render";
   elements.progressDetail.textContent = "Reading the engine’s job record.";
   await pollActiveJob();
   $("#viewerTitle").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+
+function resetSingleSession() {
+  if (elements.prompt.value.trim() && !confirm("Start a new session? Your current unsaved prompt will be cleared.")) return;
+  clearTimeout(state.jobTimer);
+  state.activeJobId = null;
+  state.activeJob = null;
+  elements.prompt.value = "";
+  clearKeyframes();
+  clearReferences();
+  setMode(state.config.defaults.mode);
+  elements.profile.value = state.config.defaults.profile;
+  updateProfile();
+  const preset = [...elements.resolution.options].find((option) => Number(option.dataset.width) === state.config.defaults.width && Number(option.dataset.height) === state.config.defaults.height);
+  elements.resolution.value = preset?.value || "custom";
+  elements.width.value = String(state.config.defaults.width);
+  elements.height.value = String(state.config.defaults.height);
+  updateResolution();
+  elements.duration.value = String(state.config.defaults.duration);
+  updateDuration();
+  elements.seed.value = "1";
+  elements.outputVideo.pause();
+  elements.outputVideo.removeAttribute("src");
+  elements.outputVideo.dataset.url = "";
+  elements.outputVideo.hidden = true;
+  elements.viewerActions.hidden = true;
+  elements.outputMeta.hidden = true;
+  elements.renderProgress.hidden = true;
+  elements.emptyStage.hidden = false;
+  updatePromptCount();
+  validateForm();
+  renderJobs();
+  setFormMessage("New session ready. Describe a scene, then create the video.", "success");
+  elements.prompt.focus();
+  elements.form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function reuseActiveSession() {
+  const render = state.activeJob?.render;
+  if (!render) {
+    setFormMessage("This session has no reusable settings.", "error");
+    return;
+  }
+  switchWorkflow("single", { focus: false });
+  setMode(render.mode || "t2v");
+  elements.prompt.value = render.prompt || "";
+  if ([...elements.profile.options].some((option) => option.value === render.profile)) {
+    elements.profile.value = render.profile;
+  }
+  updateProfile();
+  const preset = [...elements.resolution.options].find((option) => Number(option.dataset.width) === Number(render.width) && Number(option.dataset.height) === Number(render.height));
+  elements.resolution.value = preset?.value || "custom";
+  elements.width.value = String(render.width || state.config.defaults.width);
+  elements.height.value = String(render.height || state.config.defaults.height);
+  updateResolution();
+  elements.duration.value = String(render.duration || state.config.defaults.duration);
+  updateDuration();
+  elements.seed.value = String(render.seed || "1");
+  elements.refImageSize.value = render.ref_image_size === "max" ? "max" : "match";
+  updatePromptCount();
+  validateForm({ announce: true });
+  const references = render.references || {};
+  const needsReferences = render.mode !== "t2v" && Object.values(references).some((value) => Array.isArray(value) ? value.length : Boolean(value));
+  setFormMessage(needsReferences ? "Prompt and settings restored. Please add the original reference files again." : "Prompt and settings restored. You can edit them and create a new video.", needsReferences ? "" : "success");
+  elements.form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function escapeHtml(value) {
@@ -2778,6 +2886,12 @@ function bindEvents() {
   $("#refreshButton").addEventListener("click", () => Promise.allSettled([refreshHealth(), refreshJobs()]));
   $("#engineStatus").addEventListener("click", () => elements.engineCallout.scrollIntoView({ behavior: "smooth", block: "center" }));
   $("#refreshJobs").addEventListener("click", refreshJobs);
+  elements.toggleSessions.addEventListener("click", () => {
+    state.sessionsExpanded = !state.sessionsExpanded;
+    renderJobs();
+  });
+  elements.newSession.addEventListener("click", resetSingleSession);
+  elements.reuseSession.addEventListener("click", reuseActiveSession);
   $("#cancelRender").addEventListener("click", cancelActiveJob);
   for (const radio of $$('input[name="seriesTemplate"]')) radio.addEventListener("change", () => applySeriesTemplate(radio.value));
   for (const input of [elements.seriesTitle, elements.seriesBrief]) {

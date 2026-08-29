@@ -1,0 +1,15 @@
+{
+  "active": "heretic",
+  "profiles": {
+    "aligned": {
+      "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    "heretic": {
+      "filename": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+      "url": "https://huggingface.co/Momoking/Qwen3-VL-32B-Heretic-MiniMax-H3-NVFP4/resolve/0a9486d17cfb20c1a7abc97118c4d95910b9b1f4/qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+      "sha256": "a166c7bbbe66a22065159e478335fee4a633c4a3e3bb34c8e8ac4cc91bf4996f"
+    }
+  }
+}

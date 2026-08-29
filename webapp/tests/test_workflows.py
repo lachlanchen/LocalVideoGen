@@ -64,6 +64,26 @@ class DurationTests(unittest.TestCase):
         )
         self.assertEqual(spec.length, 56)
 
+    def test_beginner_defaults_use_the_small_fast_preview(self):
+        config = public_config()
+        self.assertEqual(
+            config["defaults"],
+            {
+                "mode": "t2v",
+                "profile": "preview_int8_turbo_dual",
+                "width": 864,
+                "height": 480,
+                "duration": 2,
+            },
+        )
+        self.assertEqual(config["modes"][0]["label"], "Start with words")
+        preview = next(
+            profile
+            for profile in config["profiles"]
+            if profile["id"] == "preview_int8_turbo_dual"
+        )
+        self.assertIn("recommended", preview["label"].lower())
+
 
 class GraphMatrixTests(unittest.TestCase):
     allowed_classes = {

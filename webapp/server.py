@@ -424,6 +424,19 @@ def _stored_job_summary(record: Mapping[str, Any], client: ComfyClient) -> dict[
         "previewable_outputs_count": len(outputs),
         "progress": client.job_progress(job_id),
     }
+    metadata = record.get("metadata")
+    if isinstance(metadata, Mapping):
+        prompt = " ".join(str(metadata.get("prompt") or "").split())
+        if len(prompt) > 88:
+            prompt = prompt[:87].rstrip() + "…"
+        result["session"] = {
+            "title": prompt or "Untitled H3 session",
+            "mode": metadata.get("mode"),
+            "profile": metadata.get("profile"),
+            "width": metadata.get("width"),
+            "height": metadata.get("height"),
+            "duration": metadata.get("duration"),
+        }
     if record.get("error"):
         result["error"] = str(record["error"])[:1000]
     return result

@@ -20,7 +20,9 @@ LocalVideoGen is a reproducible operating layer around a pinned external ComfyUI
 
 ## H3 Studio
 
-The light theme keeps reference setup, quality controls, and render status readable in one local workspace.
+The light theme keeps reference setup, quality controls, and render status readable in one local workspace. The default **Single Clip** setup is intentionally beginner-friendly: choose **Start with words**, describe the scene and sound, then press **Create H3 video**. H3 Studio starts with a 2-second, 864×480 fast preview; final-quality and repeatability controls remain available when needed.
+
+Every creation appears in **Recent sessions** with a plain-language status, prompt title, size, and duration. Opening a session restores its player, and **Reuse settings** copies its prompt and settings into a new attempt. Reference files must be selected again because browser upload handles are deliberately not persisted as reusable file access.
 
 ![H3 Studio light theme with local MiniMax H3 reference and render controls](docs/images/h3-studio-light.png)
 
@@ -54,7 +56,7 @@ The zero-based helper downloads the verified accepted MP4 and, for a non-final s
 
 ## What it delivers
 
-- Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, aligned NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.
+- Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, the selected aligned or Heretic NVFP4 Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.
 - Shared-workstation stage placement: GPU 0 runs the DiT, denoiser, Qwen/reference conditioning, and final video/audio decode by default, leaving GPU 1 available for LocalLLM or another protected workload. This keeps the same model, BF16 precision, sampler, resolution, and 25-step quality while using GPU-0/CPU offload. On an exclusive workstation, deliberately set `H3_AUX_DEVICE=gpu:1` to move Qwen plus reference-conditioning VAE work to GPU 1; final decode still remains on GPU 0. No PCIe peer-to-peer path is assumed.
 - Local T2V, I2V, and multi-reference R2V, including a max-identity reference preset and native synchronized audio.
 - Quality, single-GPU fallback, and low-resolution INT8 Turbo preview profiles.
@@ -114,6 +116,23 @@ H3_AUX_DEVICE=gpu:1 ./scripts/start_webapp.sh
 ```
 
 Open <http://127.0.0.1:8190>. ComfyUI remains private at <http://127.0.0.1:8188>.
+
+The local CLIPLoader selection is reversible and applies to H3 Studio plus all generated
+editable workflows. The selector verifies the chosen weights before changing anything:
+
+```bash
+# Use the optional local Heretic NVFP4 encoder.
+./scripts/set_text_encoder.py heretic
+
+# Restore the official aligned Comfy-Org encoder.
+./scripts/set_text_encoder.py aligned
+
+# Show the current selection without changing it.
+./scripts/set_text_encoder.py status
+```
+
+If H3 Studio is already running, restart only the webapp after switching. ComfyUI discovers
+both files from `ComfyUI/models/text_encoders/`; neither model is renamed or deleted.
 
 Stop only this project's verified processes when no render is active:
 
