@@ -8,7 +8,9 @@ state_file="$runtime_dir/webapp-state.json"
 lock_file="$runtime_dir/webapp-lifecycle.lock"
 port="${H3_WEBAPP_PORT:-8190}"
 comfy_url="${H3_COMFY_URL:-http://127.0.0.1:8188}"
-aux_device="${H3_AUX_DEVICE:-gpu:1}"
+# This workstation is shared: keep GPU 1 available for LocalLLM unless a
+# deliberate launch opts back into dual-device conditioning.
+aux_device="${H3_AUX_DEVICE:-gpu:0}"
 identity=("$project_root/.venv/bin/python" "$script_dir/runtime_identity.py" --service webapp)
 
 if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then

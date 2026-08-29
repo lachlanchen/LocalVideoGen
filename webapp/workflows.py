@@ -21,7 +21,7 @@ TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 AUX_DEVICE_ENV = "H3_AUX_DEVICE"
-DEFAULT_AUX_DEVICE = "gpu:1"
+DEFAULT_AUX_DEVICE = "gpu:0"
 SUPPORTED_AUX_DEVICES = frozenset({"gpu:0", "gpu:1"})
 
 
@@ -32,10 +32,10 @@ class RequestError(ValueError):
 def auxiliary_device() -> str:
     """Return the configured device for Qwen and reference conditioning.
 
-    GPU 1 remains the normal two-GPU layout. Shared workstations can set
-    ``H3_AUX_DEVICE=gpu:0`` so a protected workload may retain GPU 1 while H3
-    uses the same BF16 weights, resolution, sampler, and step count through
-    standard model offload on GPU 0.
+    Shared workstations keep every H3 stage on GPU 0 by default so a protected
+    workload may retain GPU 1. An exclusive workstation can set
+    ``H3_AUX_DEVICE=gpu:1`` to restore the two-device conditioning layout.
+    Both routes use the same BF16 weights, resolution, sampler, and step count.
     """
 
     value = os.environ.get(AUX_DEVICE_ENV, DEFAULT_AUX_DEVICE).strip().lower()

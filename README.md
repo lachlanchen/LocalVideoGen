@@ -55,7 +55,7 @@ The zero-based helper downloads the verified accepted MP4 and, for a non-final s
 ## What it delivers
 
 - Highest-quality preset: pruned BF16 Ref2VA/FL2VA DiT, aligned NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, and 25 full-model steps.
-- Dual-GPU stage placement: GPU 0 runs the DiT, denoiser, and final video/audio decode; GPU 1 normally runs Qwen plus reference-conditioning VAE work. Keeping final decode on GPU 0 protects a completed sample if another workload later occupies GPU 1. No PCIe peer-to-peer path is assumed. On a shared workstation where a protected workload must retain GPU 1 from the start, launch the studio with `H3_AUX_DEVICE=gpu:0`; this keeps the same model, BF16 precision, sampler, resolution, and step count while using standard GPU-0/CPU offload for auxiliary conditioning.
+- Shared-workstation stage placement: GPU 0 runs the DiT, denoiser, Qwen/reference conditioning, and final video/audio decode by default, leaving GPU 1 available for LocalLLM or another protected workload. This keeps the same model, BF16 precision, sampler, resolution, and 25-step quality while using GPU-0/CPU offload. On an exclusive workstation, deliberately set `H3_AUX_DEVICE=gpu:1` to move Qwen plus reference-conditioning VAE work to GPU 1; final decode still remains on GPU 0. No PCIe peer-to-peer path is assumed.
 - Local T2V, I2V, and multi-reference R2V, including a max-identity reference preset and native synchronized audio.
 - Quality, single-GPU fallback, and low-resolution INT8 Turbo preview profiles.
 - Local H3 output up to a 768-pixel short edge at 24 fps. MiniMax's separate 2K regeneration stage is API-only and is not presented as a local feature.
@@ -68,8 +68,9 @@ flowchart LR
     S --> V[Upload and graph validation]
     V --> J[(Private job registry)]
     V -->|loopback :8188| C[Pinned ComfyUI]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + video/audio VAEs]
+    C --> G0[GPU 0: all H3 stages by default]
+    G1[GPU 1: reserved for LocalLLM by default]
+    C -. optional H3_AUX_DEVICE=gpu:1 .-> G1
     C <--> R[Host RAM: DynamicVRAM + async offload]
     M[SHA-256 verified model bundle] --> C
 ```
@@ -108,8 +109,8 @@ cd LocalVideoGen
 ./scripts/start_comfyui.sh
 ./scripts/start_webapp.sh
 
-# Shared-workstation maximum-quality mode: leave protected GPU-1 work alive.
-H3_AUX_DEVICE=gpu:0 ./scripts/start_webapp.sh
+# Optional exclusive-workstation speed mode: use both GPUs for H3 stages.
+H3_AUX_DEVICE=gpu:1 ./scripts/start_webapp.sh
 ```
 
 Open <http://127.0.0.1:8190>. ComfyUI remains private at <http://127.0.0.1:8188>.

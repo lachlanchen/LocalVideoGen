@@ -123,8 +123,8 @@ class GraphMatrixTests(unittest.TestCase):
                 self.assertEqual(bool(by_class.get("LoraLoaderModelOnly")), profile.turbo)
                 if profile.dual_gpu:
                     self.assertEqual(by_class["SelectModelDevice"][0]["device"], "gpu:0")
-                    self.assertEqual(by_class["SelectCLIPDevice"][0]["device"], "gpu:1")
-                    self.assertEqual([item["device"] for item in by_class["SelectVAEDevice"]], ["gpu:1", "gpu:1"])
+                    self.assertEqual(by_class["SelectCLIPDevice"][0]["device"], "gpu:0")
+                    self.assertEqual([item["device"] for item in by_class["SelectVAEDevice"]], ["gpu:0", "gpu:0"])
                 else:
                     self.assertNotIn("SelectModelDevice", by_class)
 
@@ -154,6 +154,25 @@ class GraphMatrixTests(unittest.TestCase):
                     "final_decode": "gpu:0",
                 },
             )
+
+    def test_exclusive_workstation_can_move_auxiliary_stages_to_gpu_one(self):
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:1"}):
+            graph = graph_for("r2v", "quality_bf16_dual")
+            by_class: dict[str, list[dict]] = {}
+            for node in graph.values():
+                by_class.setdefault(node["class_type"], []).append(node["inputs"])
+            self.assertEqual(by_class["SelectModelDevice"][0]["device"], "gpu:0")
+            self.assertEqual(by_class["SelectCLIPDevice"][0]["device"], "gpu:1")
+            self.assertEqual(
+                [item["device"] for item in by_class["SelectVAEDevice"]],
+                ["gpu:1", "gpu:1"],
+            )
+            maximum = next(
+                profile
+                for profile in public_config()["profiles"]
+                if profile["id"] == "quality_bf16_dual"
+            )
+            self.assertTrue(maximum["effective_dual_gpu"])
 
     def test_invalid_auxiliary_device_is_rejected(self):
         with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:9"}):
