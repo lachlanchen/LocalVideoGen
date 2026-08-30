@@ -30,7 +30,7 @@ LALACHAN Series does not require a per-shot destination plate, so its optional e
 
 1. Switch **Single clip** to **Video series**.
 2. Choose a template, project title, and one quality profile for the entire movie.
-3. Upload shared cast, world, voice, music, and motion references once.
+3. Upload shared cast, world, voice, music, and motion references once. Before uploading a visual video reference, pre-clean any burned captions and run the fail-closed [subtitle-free reference guard](reference-subtitle-guard.md) on the exact 2–15 second segment. Prompt-only “no subtitles” is not a substitute for clean source pixels.
 4. Edit, add, duplicate, delete, or reorder 2–12 shot cards. Every shot has its own title, prompt, requested duration, and seed.
 5. Review the aligned 24 fps frame count, total actual duration, canvas, identity fidelity, continuity length, per-shot effective reference maps, runtime readiness, and reference limits in preflight. Any authored P1–P9 tag whose effective reference was omitted blocks start.
 6. Select **Save & start new storyboard**. H3 Studio stores a durable private project before asking the local engine to render.

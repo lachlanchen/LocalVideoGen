@@ -248,6 +248,10 @@ function selectedProfile() {
   return state.config?.profiles.find((profile) => profile.id === elements.profile.value) || null;
 }
 
+function profileNeedsTwoGpus(profile) {
+  return Boolean(profile?.requires_two_gpus ?? profile?.effective_dual_gpu ?? profile?.dual_gpu);
+}
+
 function deviceCount() {
   const devices = state.health?.stats?.devices;
   return Array.isArray(devices) ? devices.length : 0;
@@ -383,7 +387,7 @@ function setupConfig(config) {
     const option = document.createElement("option");
     option.value = profile.id;
     option.textContent = profile.label;
-    option.dataset.dual = String(profile.dual_gpu);
+    option.dataset.requiresTwoGpus = String(profileNeedsTwoGpus(profile));
     elements.profile.append(option);
   }
   elements.profile.value = config.defaults.profile;
@@ -481,7 +485,7 @@ function validateForm({ announce = false } = {}) {
     if (!state.health?.connected) throw new Error("Start the verified ComfyUI engine before rendering.");
     if (state.health.ready === false) throw new Error(state.health.message || "The H3 engine is not ready yet.");
     const profile = selectedProfile();
-    if (profile?.dual_gpu && deviceCount() < 2) throw new Error("This profile needs both RTX 4090 GPUs.");
+    if (profileNeedsTwoGpus(profile) && deviceCount() < 2) throw new Error("This profile needs both RTX 4090 GPUs.");
   } catch (error) {
     message = error.message;
   }
@@ -707,7 +711,7 @@ function renderHealth() {
 
   const count = deviceCount();
   elements.metricGpu.textContent = connected ? `${count} × RTX 4090` : "—";
-  elements.metricGpuNote.textContent = count >= 2 ? "DiT · encoder/VAE split" : count === 1 ? "Single-GPU offload only" : "Waiting for engine";
+  elements.metricGpuNote.textContent = count >= 2 ? "GPU 1 available · profile-controlled" : count === 1 ? "GPU 0 · RAM offload" : "Waiting for engine";
 
   const modelState = health.model_status || (ready ? "verified" : connected ? "checking" : "unknown");
   elements.metricModels.textContent = modelState === "verified" ? "Verified" : modelState === "downloading" ? "Downloading" : modelState === "invalid" ? "Blocked" : "Checking";
@@ -717,10 +721,10 @@ function renderHealth() {
   elements.lastChecked.textContent = `Checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 
   for (const option of [...elements.profile.options]) {
-    if (option.dataset.dual === "true") option.disabled = connected && count < 2;
+    if (option.dataset.requiresTwoGpus === "true") option.disabled = connected && count < 2;
   }
   for (const option of [...elements.seriesProfile.options]) {
-    if (option.dataset.dual === "true") option.disabled = connected && count < 2;
+    if (option.dataset.requiresTwoGpus === "true") option.disabled = connected && count < 2;
   }
   if (state.series.initialized) updateSeriesReview();
 }
@@ -774,7 +778,7 @@ function friendlyPhase(job) {
     submitting: ["Submitting", "Registering the native H3 graph with the engine."],
     queued: ["Queued", "Waiting for the H3 engine."],
     in_progress: ["Generating", "The model is working through the scene."],
-    loading: ["Loading model", "Placing H3 stages across both GPUs and host memory."],
+    loading: ["Loading model", "Placing H3 stages on the selected GPU route and host memory."],
     executing: ["Preparing", "Conditioning picture, sound, and motion."],
     sampling: ["Sampling", "Denoising the joint video and audio latent."],
     finalizing: ["Finalizing", "Decoding frames, audio, and the MP4 container."],
@@ -1300,7 +1304,7 @@ function setupSeriesConfig(config) {
     const option = document.createElement("option");
     option.value = profile.id;
     option.textContent = profile.label;
-    option.dataset.dual = String(profile.dual_gpu);
+    option.dataset.requiresTwoGpus = String(profileNeedsTwoGpus(profile));
     elements.seriesProfile.append(option);
   }
   elements.seriesProfile.value = config.defaults.profile;
@@ -2346,7 +2350,7 @@ function seriesDraftChecks() {
   const engineReady = state.health?.connected && state.health?.ready !== false;
   add(engineReady ? "ok" : "error", engineReady ? "Local H3 engine is ready" : "Local H3 engine needs attention", engineReady ? "Shots will run sequentially; no second heavy render is launched." : state.health?.message || "Start the verified local runtime before generating.");
   const profile = state.config?.profiles.find((item) => item.id === elements.seriesProfile.value);
-  if (profile?.dual_gpu && deviceCount() < 2) add("error", "Maximum quality needs both GPUs", "Choose a single-GPU profile or make both RTX 4090 devices available.");
+  if (profileNeedsTwoGpus(profile) && deviceCount() < 2) add("error", "Maximum quality needs both GPUs", "Choose a single-GPU profile or make both RTX 4090 devices available.");
   if (state.series.uploading) add("error", "Uploads are still processing", `Wait for ${state.series.uploading} reference upload${state.series.uploading === 1 ? "" : "s"} to finish.`);
   if (state.series.assetValidation !== "verified") {
     add(

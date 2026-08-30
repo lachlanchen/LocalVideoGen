@@ -16,7 +16,7 @@ from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
 from webapp.series_runner import LALACHAN_REFERENCE_LABELS
 from webapp.server import ASSETS_KEY, MISSING_JOB_GRACE_MS, SERIES_KEY, create_app
-from webapp.workflows import UploadedAsset
+from webapp.workflows import AUX_DEVICE_ENV, UploadedAsset
 
 
 class FakeProxyContent:
@@ -666,12 +666,20 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 400)
         self.comfy.devices = [{"name": "gpu0"}]
-        response = await self.client.post(
-            "/api/renders",
-            json={"mode": "t2v", "profile": "quality_bf16_dual", "prompt": "x"},
-        )
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:1"}):
+            response = await self.client.post(
+                "/api/renders",
+                json={"mode": "t2v", "profile": "quality_bf16_dual", "prompt": "x"},
+            )
         self.assertEqual(response.status, 409)
         self.assertIn("both RTX 4090", (await response.json())["error"])
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:0"}):
+            response = await self.client.post(
+                "/api/renders",
+                json={"mode": "t2v", "profile": "quality_bf16_dual", "prompt": "x"},
+            )
+        self.assertEqual(response.status, 202, await response.text())
+        self.assertEqual(len(self.comfy.submissions), 1)
 
     async def test_cancel_becomes_durably_terminal(self) -> None:
         job_id = str(uuid.uuid4())

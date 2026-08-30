@@ -774,7 +774,7 @@ class LocalVideoGenClient:
                 )
             ):
                 raise SeriesClientError(
-                    "quality_bf16_dual must be BF16, dual-GPU, non-Turbo, and 25-step R2V"
+                    "quality_bf16_dual must be BF16, stage-placement-capable, non-Turbo, and 25-step R2V"
                 )
             picture_slots = capability.get("picture_slots")
             if not isinstance(picture_slots, Mapping):

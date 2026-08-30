@@ -63,6 +63,7 @@ from .workflows import (
     apply_system_prompt,
     compile_prompt,
     parse_render_spec,
+    profile_requires_two_devices,
     public_config,
 )
 
@@ -1074,7 +1075,9 @@ def create_app(
                 status=409,
             )
         devices = readiness.get("stats", {}).get("devices", [])
-        if spec.profile.dual_gpu and (not isinstance(devices, list) or len(devices) < 2):
+        if profile_requires_two_devices(spec.profile) and (
+            not isinstance(devices, list) or len(devices) < 2
+        ):
             raise ComfyError("The selected profile requires both RTX 4090 GPUs", status=409)
         prompt = compile_prompt(spec)
         prompt_id = str(uuid.uuid4())
@@ -1198,7 +1201,9 @@ def create_app(
             )
         profile_id = str(existing["document"]["settings"]["profile"])
         devices = readiness.get("stats", {}).get("devices", [])
-        if PROFILES[profile_id].dual_gpu and (not isinstance(devices, list) or len(devices) < 2):
+        if profile_requires_two_devices(PROFILES[profile_id]) and (
+            not isinstance(devices, list) or len(devices) < 2
+        ):
             raise ComfyError("The selected profile requires both RTX 4090 GPUs", status=409)
 
         def queue(document: dict[str, Any], status: str):

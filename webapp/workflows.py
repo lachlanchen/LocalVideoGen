@@ -91,6 +91,18 @@ def auxiliary_device() -> str:
     return value
 
 
+def profile_requires_two_devices(profile: "Profile") -> bool:
+    """Whether the effective graph actually targets both CUDA devices.
+
+    The historical ``dual_gpu`` profile names describe graphs that include
+    explicit device-selector nodes.  On a shared workstation those selectors
+    may deliberately all target GPU 0, so the profile remains otherwise
+    identical while GPU 1 stays available to LocalLLM.
+    """
+
+    return profile.dual_gpu and auxiliary_device() != "gpu:0"
+
+
 @dataclass(frozen=True)
 class Profile:
     id: str
@@ -500,6 +512,7 @@ def public_config() -> dict[str, Any]:
                 "final_decode": "gpu:0",
             }
             published["effective_dual_gpu"] = aux_device != "gpu:0"
+        published["requires_two_gpus"] = profile.dual_gpu and aux_device != "gpu:0"
         profiles.append(published)
     return {
         "modes": [

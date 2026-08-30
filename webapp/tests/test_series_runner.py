@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
@@ -20,7 +20,7 @@ from webapp.series_runner import (
     public_series,
 )
 from webapp.series_store import SeriesStore
-from webapp.workflows import RequestError, UploadedAsset
+from webapp.workflows import AUX_DEVICE_ENV, RequestError, UploadedAsset
 
 
 class FakeClient:
@@ -313,6 +313,66 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             submission["metadata"]["system_prompt"],
             "Never add subtitles. Keep motion gentle.",
         )
+
+    async def test_effective_single_gpu_profile_submits_with_one_reported_device(
+        self,
+    ) -> None:
+        self.client.health = AsyncMock(
+            return_value={
+                "ready": True,
+                "missing_nodes": [],
+                "stats": {"devices": [{"name": "gpu0"}]},
+            }
+        )
+        record = self.series.get(self.series_id)
+
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:0"}):
+            self.assertTrue(
+                await self.runner._submit_shot(
+                    self.series_id,
+                    record["document"],
+                    0,
+                    expected_revision=int(record["revision"]),
+                )
+            )
+
+        self.client.health.assert_awaited_once_with(inspect_nodes=True)
+        self.assertEqual(len(self.client.submissions), 1)
+        submitted = self.series.get(self.series_id)
+        self.assertEqual(submitted["document"]["shots"][0]["status"], "rendering")
+        self.assertEqual(len(submitted["document"]["shots"][0]["attempts"]), 1)
+        self.assertEqual(len(self.jobs.active()), 1)
+
+    async def test_effective_dual_gpu_profile_rejects_one_device_before_claim(
+        self,
+    ) -> None:
+        self.client.health = AsyncMock(
+            return_value={
+                "ready": True,
+                "missing_nodes": [],
+                "stats": {"devices": [{"name": "gpu0"}]},
+            }
+        )
+        record = self.series.get(self.series_id)
+
+        with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:1"}):
+            with self.assertRaisesRegex(ComfyError, "requires both") as raised:
+                await self.runner._submit_shot(
+                    self.series_id,
+                    record["document"],
+                    0,
+                    expected_revision=int(record["revision"]),
+                )
+
+        self.assertEqual(raised.exception.status, 409)
+        self.client.health.assert_awaited_once_with(inspect_nodes=True)
+        self.assertEqual(self.client.submissions, [])
+        self.assertEqual(self.jobs.list(), [])
+        rejected = self.series.get(self.series_id)
+        self.assertEqual(rejected["status"], "queued")
+        self.assertIsNone(rejected["document"]["active_shot"])
+        self.assertEqual(rejected["document"]["shots"][0]["status"], "pending")
+        self.assertEqual(rejected["document"]["shots"][0]["attempts"], [])
 
     async def test_waits_for_unrelated_job_then_chains_and_stitches(self) -> None:
         unrelated = str(uuid.uuid4())

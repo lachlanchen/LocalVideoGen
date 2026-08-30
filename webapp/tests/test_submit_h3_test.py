@@ -10,6 +10,7 @@ import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from scripts.submit_h3_test import (
     DEFAULT_DURATION,
@@ -391,17 +392,18 @@ class DirectRenderTests(unittest.IsolatedAsyncioTestCase):
     async def test_wrong_gpu_inventory_blocks_before_store_or_submit(self) -> None:
         client = FakeClient(self.target.base_url, timeout=30, jobs=[self.completed_job()])
         client.devices = [{"name": "NVIDIA GeForce RTX 4090"}]
-        with self.assertRaisesRegex(SubmitRenderError, "requires both"):
-            await submit_test_render(
-                RenderOptions(prompt="a forest with fairy tales"),
-                project_root=self.root,
-                runtime_verifier=lambda _: self.target,
-                client_factory=lambda base_url, timeout: client,
-                store=self.store,
-                probe=lambda *args, **kwargs: None,  # Never reached.
-                job_id_factory=lambda: self.job_id,
-                progress=lambda _: None,
-            )
+        with patch.dict("os.environ", {"H3_AUX_DEVICE": "gpu:1"}):
+            with self.assertRaisesRegex(SubmitRenderError, "requires both"):
+                await submit_test_render(
+                    RenderOptions(prompt="a forest with fairy tales"),
+                    project_root=self.root,
+                    runtime_verifier=lambda _: self.target,
+                    client_factory=lambda base_url, timeout: client,
+                    store=self.store,
+                    probe=lambda *args, **kwargs: None,  # Never reached.
+                    job_id_factory=lambda: self.job_id,
+                    progress=lambda _: None,
+                )
         self.assertEqual(self.store.records, {})
         self.assertEqual(client.submissions, [])
 

@@ -31,7 +31,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from webapp.comfy_client import ComfyClient, ComfyError, flatten_outputs  # noqa: E402
 from webapp.job_store import JobStore, JobStoreError, canonical_job_id  # noqa: E402
-from webapp.workflows import FPS, PROFILES, RequestError, RenderSpec, compile_prompt, parse_render_spec  # noqa: E402
+from webapp.workflows import (  # noqa: E402
+    FPS,
+    PROFILES,
+    RequestError,
+    RenderSpec,
+    compile_prompt,
+    parse_render_spec,
+    profile_requires_two_devices,
+)
 
 
 DEFAULT_PROFILE = "preview_int8_turbo_dual"
@@ -566,7 +574,7 @@ async def submit_test_render(
             note = ", ".join(str(item) for item in missing) if isinstance(missing, list) else "unknown"
             raise SubmitRenderError(f"ComfyUI is missing required H3 nodes: {note}")
         devices = readiness.get("stats", {}).get("devices", [])
-        if spec.profile.dual_gpu:
+        if profile_requires_two_devices(spec.profile):
             if not isinstance(devices, list) or len(devices) < 2:
                 raise SubmitRenderError("the selected test profile requires both RTX 4090 GPUs")
             names = [str(item.get("name") or "") for item in devices[:2] if isinstance(item, Mapping)]

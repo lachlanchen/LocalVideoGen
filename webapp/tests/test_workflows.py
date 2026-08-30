@@ -14,6 +14,7 @@ from webapp.workflows import (
     aligned_frame_count,
     compile_prompt,
     parse_render_spec,
+    profile_requires_two_devices,
     public_config,
 )
 
@@ -166,6 +167,8 @@ class GraphMatrixTests(unittest.TestCase):
                 if profile["id"] == "quality_bf16_dual"
             )
             self.assertFalse(maximum["effective_dual_gpu"])
+            self.assertFalse(maximum["requires_two_gpus"])
+            self.assertFalse(profile_requires_two_devices(PROFILES["quality_bf16_dual"]))
             self.assertEqual(
                 maximum["device_layout"],
                 {
@@ -193,6 +196,8 @@ class GraphMatrixTests(unittest.TestCase):
                 if profile["id"] == "quality_bf16_dual"
             )
             self.assertTrue(maximum["effective_dual_gpu"])
+            self.assertTrue(maximum["requires_two_gpus"])
+            self.assertTrue(profile_requires_two_devices(PROFILES["quality_bf16_dual"]))
 
     def test_invalid_auxiliary_device_is_rejected(self):
         with patch.dict("os.environ", {AUX_DEVICE_ENV: "gpu:9"}):
