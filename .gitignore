@@ -5,10 +5,11 @@
 __pycache__/
 *.py[cod]
 
-# Private runtime state, uploads, logs, job history, and verification receipts.
+# Private user IP: prompts, settings, sessions, generated evidence, uploads,
+# browser state, logs, job history, and verification receipts never belong in Git.
 runtime/
 
-# Upstream working copies are installed locally and are not vendored here.
+# Upstream working copies and all ComfyUI inputs/outputs are local-only.
 ComfyUI/
 workflow_templates/
 disabled_custom_nodes/

@@ -6,6 +6,9 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const MAX_SEED = (1n << 64n) - 1n;
 const state = {
   config: null,
+  settings: null,
+  durationSaveVersion: 0,
+  pendingDeleteJobId: null,
   mode: "t2v",
   health: null,
   uploading: 0,
@@ -58,6 +61,7 @@ const elements = {
   height: $("#height"),
   duration: $("#duration"),
   durationLabel: $("#durationLabel"),
+  durationMemory: $("#durationMemory"),
   frameCount: $("#frameCount"),
   actualDuration: $("#actualDuration"),
   seed: $("#seed"),
@@ -95,6 +99,15 @@ const elements = {
   downloadOutput: $("#downloadOutput"),
   reuseSession: $("#reuseSession"),
   newSession: $("#newSession"),
+  systemPrompt: $("#systemPrompt"),
+  systemPromptCount: $("#systemPromptCount"),
+  saveSystemPrompt: $("#saveSystemPrompt"),
+  systemPromptStatus: $("#systemPromptStatus"),
+  deleteSessionDialog: $("#deleteSessionDialog"),
+  deleteSessionName: $("#deleteSessionName"),
+  deleteSessionStatus: $("#deleteSessionStatus"),
+  cancelDeleteSession: $("#cancelDeleteSession"),
+  confirmDeleteSession: $("#confirmDeleteSession"),
   outputMeta: $("#outputMeta"),
   singleWorkflowTab: $("#singleWorkflowTab"),
   seriesWorkflowTab: $("#seriesWorkflowTab"),
@@ -255,6 +268,75 @@ function updateDuration() {
   elements.durationLabel.textContent = `${seconds.toFixed(1)} s`;
   elements.frameCount.textContent = `${frames} frames`;
   elements.actualDuration.textContent = `actual ${(frames / 24).toFixed(2)} s`;
+}
+
+function updateSystemPromptCount() {
+  const maximum = Number(state.config?.limits?.system_prompt_chars) || 2000;
+  elements.systemPromptCount.textContent = `${elements.systemPrompt.value.length.toLocaleString()} / ${maximum.toLocaleString()}`;
+}
+
+function setSystemPromptMessage(message, kind = "") {
+  elements.systemPromptStatus.textContent = message;
+  elements.systemPromptStatus.className = `form-status${kind ? ` ${kind}` : ""}`;
+}
+
+async function loadSettings() {
+  try {
+    const settings = await api("/api/settings");
+    state.settings = settings;
+    elements.systemPrompt.value = settings.system_prompt || "";
+    elements.duration.value = String(settings.preferred_duration ?? state.config.defaults.duration);
+    updateSystemPromptCount();
+    updateDuration();
+    elements.durationMemory.textContent = "remembered for next time";
+  } catch (error) {
+    setSystemPromptMessage(`Saved requirements unavailable: ${error.message}`, "error");
+    elements.durationMemory.textContent = "could not load saved length";
+  }
+}
+
+async function savePreferredDuration({ announce = false } = {}) {
+  const version = ++state.durationSaveVersion;
+  const preferredDuration = Number(elements.duration.value);
+  elements.durationMemory.textContent = "saving…";
+  try {
+    const settings = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ preferred_duration: preferredDuration }),
+    });
+    if (version !== state.durationSaveVersion) return;
+    state.settings = settings;
+    elements.durationMemory.textContent = "remembered for next time";
+    if (announce) setFormMessage(`Video length remembered: ${preferredDuration.toFixed(1)} seconds.`, "success");
+  } catch (error) {
+    if (version !== state.durationSaveVersion) return;
+    elements.durationMemory.textContent = "could not save";
+    if (announce) setFormMessage(error.message, "error");
+  }
+}
+
+async function saveRememberedRequirements() {
+  elements.saveSystemPrompt.disabled = true;
+  setSystemPromptMessage("Saving requirements…");
+  try {
+    const settings = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ system_prompt: elements.systemPrompt.value }),
+    });
+    state.settings = settings;
+    elements.systemPrompt.value = settings.system_prompt || "";
+    updateSystemPromptCount();
+    setSystemPromptMessage(
+      settings.system_prompt
+        ? "Saved. These requirements will be added to every new clip and series shot."
+        : "Cleared. New videos will use only their own scene directions.",
+      "success",
+    );
+  } catch (error) {
+    setSystemPromptMessage(error.message, "error");
+  } finally {
+    elements.saveSystemPrompt.disabled = false;
+  }
 }
 
 function updateRenderButtonCopy() {
@@ -810,6 +892,8 @@ function renderJobs() {
   }
   const visibleJobs = state.sessionsExpanded ? state.jobs : state.jobs.slice(0, 6);
   for (const job of visibleJobs) {
+    const row = document.createElement("div");
+    row.className = "job-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `job-card${job.id === state.activeJobId ? " active" : ""}`;
@@ -823,12 +907,68 @@ function renderJobs() {
     button.innerHTML = `<span class="job-state ${escapeHtml(job.status)}" aria-hidden="true"></span><span class="job-copy"><strong>${escapeHtml(session.title || "Untitled H3 session")}</strong><small>${escapeHtml(details)}</small></span><span class="job-time">${escapeHtml(formatJobTime(job.create_time))}</span>`;
     button.setAttribute("aria-label", `Open ${statusLabel.toLowerCase()} session: ${session.title || job.id.slice(0, 8)}`);
     button.addEventListener("click", () => openJob(job.id));
-    elements.jobList.append(button);
+    row.append(button);
+    if (session.deletable) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "session-delete";
+      remove.textContent = "Delete";
+      remove.setAttribute("aria-label", `Delete session and video: ${session.title || job.id.slice(0, 8)}`);
+      remove.addEventListener("click", () => openDeleteSessionDialog(job));
+      row.append(remove);
+    }
+    elements.jobList.append(row);
   }
   elements.toggleSessions.hidden = state.jobs.length <= 6;
   elements.toggleSessions.textContent = state.sessionsExpanded
     ? "Show fewer sessions"
     : `Show all ${state.jobs.length} sessions`;
+}
+
+function openDeleteSessionDialog(job) {
+  if (!job?.session?.deletable) return;
+  state.pendingDeleteJobId = job.id;
+  elements.deleteSessionName.textContent = job.session.title || "Untitled H3 session";
+  elements.deleteSessionStatus.textContent = "";
+  elements.confirmDeleteSession.disabled = false;
+  elements.cancelDeleteSession.disabled = false;
+  elements.deleteSessionDialog.showModal();
+}
+
+function clearDeletedViewer() {
+  clearTimeout(state.jobTimer);
+  state.activeJobId = null;
+  state.activeJob = null;
+  elements.outputVideo.pause();
+  elements.outputVideo.removeAttribute("src");
+  elements.outputVideo.dataset.url = "";
+  elements.outputVideo.load();
+  elements.outputVideo.hidden = true;
+  elements.viewerActions.hidden = true;
+  elements.outputMeta.hidden = true;
+  elements.renderProgress.hidden = true;
+  elements.emptyStage.hidden = false;
+}
+
+async function deletePendingSession() {
+  const jobId = state.pendingDeleteJobId;
+  if (!jobId) return;
+  elements.confirmDeleteSession.disabled = true;
+  elements.cancelDeleteSession.disabled = true;
+  elements.deleteSessionStatus.textContent = "Deleting the saved session and its video…";
+  try {
+    await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE", body: "{}" });
+    if (state.activeJobId === jobId) clearDeletedViewer();
+    state.jobs = state.jobs.filter((job) => job.id !== jobId);
+    renderJobs();
+    elements.deleteSessionDialog.close();
+    setFormMessage("Session and generated video deleted.", "success");
+    await refreshJobs();
+  } catch (error) {
+    elements.deleteSessionStatus.textContent = error.message;
+    elements.confirmDeleteSession.disabled = false;
+    elements.cancelDeleteSession.disabled = false;
+  }
 }
 
 function sessionStatusLabel(status) {
@@ -885,7 +1025,7 @@ function resetSingleSession() {
   elements.width.value = String(state.config.defaults.width);
   elements.height.value = String(state.config.defaults.height);
   updateResolution();
-  elements.duration.value = String(state.config.defaults.duration);
+  elements.duration.value = String(state.settings?.preferred_duration ?? state.config.defaults.duration);
   updateDuration();
   elements.seed.value = "1";
   elements.outputVideo.pause();
@@ -924,6 +1064,7 @@ function reuseActiveSession() {
   updateResolution();
   elements.duration.value = String(render.duration || state.config.defaults.duration);
   updateDuration();
+  void savePreferredDuration();
   elements.seed.value = String(render.seed || "1");
   elements.refImageSize.value = render.ref_image_size === "max" ? "max" : "match";
   updatePromptCount();
@@ -2857,11 +2998,17 @@ function bindEvents() {
   elements.form.addEventListener("submit", submitRender);
   elements.seriesComposer.addEventListener("submit", submitSeries);
   elements.prompt.addEventListener("input", () => { updatePromptCount(); validateForm(); });
-  elements.profile.addEventListener("change", updateProfile);
+  elements.profile.addEventListener("change", () => { updateProfile(); void savePreferredDuration(); });
   elements.resolution.addEventListener("change", updateResolution);
   elements.width.addEventListener("input", () => { elements.resolution.value = "custom"; elements.customDimensions.hidden = false; validateForm(); });
   elements.height.addEventListener("input", () => { elements.resolution.value = "custom"; elements.customDimensions.hidden = false; validateForm(); });
   elements.duration.addEventListener("input", updateDuration);
+  elements.duration.addEventListener("change", () => savePreferredDuration({ announce: true }));
+  elements.systemPrompt.addEventListener("input", updateSystemPromptCount);
+  elements.saveSystemPrompt.addEventListener("click", saveRememberedRequirements);
+  elements.cancelDeleteSession.addEventListener("click", () => elements.deleteSessionDialog.close());
+  elements.confirmDeleteSession.addEventListener("click", deletePendingSession);
+  elements.deleteSessionDialog.addEventListener("close", () => { state.pendingDeleteJobId = null; });
   elements.seed.addEventListener("input", () => validateForm());
   $("#randomSeed").addEventListener("click", randomSeed);
   $("#promptRecipe").addEventListener("click", () => {
@@ -2952,6 +3099,7 @@ async function init() {
     setFormMessage(`Webapp configuration failed: ${error.message}`, "error");
     return;
   }
+  await loadSettings();
   await Promise.allSettled([refreshHealth(), refreshJobs()]);
   setInterval(refreshHealth, 10000);
   setInterval(refreshJobs, 7000);

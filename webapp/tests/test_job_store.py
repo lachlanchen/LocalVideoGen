@@ -56,6 +56,39 @@ class JobStoreTests(unittest.TestCase):
             if candidate.exists():
                 self.assertEqual(stat.S_IMODE(candidate.stat().st_mode), 0o600)
 
+    def test_deleted_database_is_reinitialized_as_empty_history(self):
+        old_id = new_id()
+        self.store.register(old_id, {"prompt": "old session"}, status="completed")
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(f"{self.path}{suffix}")
+            if candidate.exists():
+                candidate.unlink()
+
+        self.assertEqual(self.store.list(), [])
+        self.assertTrue(self.path.is_file())
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+                ).fetchone()
+            )
+        replacement_id = new_id()
+        self.store.register(replacement_id, {"prompt": "new session"})
+        self.assertTrue(self.store.owns(replacement_id))
+
+    def test_delete_returns_record_and_removes_only_requested_row(self):
+        keep_id = new_id()
+        delete_id = new_id()
+        self.store.register(keep_id, {"prompt": "keep"}, status="completed")
+        expected = self.store.register(
+            delete_id, {"prompt": "delete"}, status="completed"
+        )
+        self.assertEqual(self.store.delete(delete_id), expected)
+        self.assertIsNone(self.store.get(delete_id))
+        self.assertTrue(self.store.owns(keep_id))
+        self.assertIsNone(self.store.delete(delete_id))
+
     def test_register_update_get_and_status(self):
         job_id = new_id()
         created = self.store.register(job_id, {"mode": "t2v", "seed": "7"})

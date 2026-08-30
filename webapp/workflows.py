@@ -49,6 +49,32 @@ class RequestError(ValueError):
     """A safe, user-facing render request error."""
 
 
+def apply_system_prompt(prompt: Any, system_prompt: Any) -> tuple[str, str]:
+    """Return (authored, effective) prompts with durable requirements prefixed."""
+
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise RequestError("prompt is required")
+    authored = prompt.strip()
+    if len(authored) > 12_000:
+        raise RequestError("prompt is longer than 12,000 characters")
+    if not isinstance(system_prompt, str):
+        raise RequestError("always-remember requirements must be text")
+    remembered = system_prompt.strip()
+    if not remembered:
+        return authored, authored
+    effective = (
+        "Always follow these requirements for every generated video:\n"
+        f"{remembered}\n\n"
+        "Current scene request:\n"
+        f"{authored}"
+    )
+    if len(effective) > 12_000:
+        raise RequestError(
+            "the scene plus always-remember requirements is longer than 12,000 characters"
+        )
+    return authored, effective
+
+
 def auxiliary_device() -> str:
     """Return the configured device for Qwen and reference conditioning.
 

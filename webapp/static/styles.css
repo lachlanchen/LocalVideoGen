@@ -316,6 +316,19 @@ h2 { margin-bottom: 0; font-size: 1.05rem; letter-spacing: -0.015em; }
 .workflow-option[aria-pressed="true"] { border-color: var(--line); background: var(--panel-raised); color: var(--text); box-shadow: 0 5px 17px rgba(31, 25, 18, 0.12); }
 .workflow-option[aria-pressed="true"] > span { border-color: rgba(var(--accent-rgb), 0.28); background: rgba(var(--accent-rgb), 0.1); color: var(--accent); }
 
+.memory-settings { margin: -12px 0 24px; border: 1px solid rgba(var(--cyan-rgb), 0.22); border-radius: 14px; background: rgba(var(--cyan-rgb), 0.045); }
+.memory-settings summary { display: grid; grid-template-columns: 30px minmax(0, 1fr); grid-template-rows: auto auto; gap: 0 9px; align-items: center; padding: 12px 14px; cursor: pointer; list-style: none; }
+.memory-settings summary::-webkit-details-marker { display: none; }
+.memory-settings summary > span { display: grid; grid-row: 1 / 3; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: rgba(var(--cyan-rgb), 0.11); color: var(--cyan); font-weight: 800; }
+.memory-settings summary strong { font-size: 0.73rem; }
+.memory-settings summary small { color: var(--quiet); font-size: 0.61rem; }
+.memory-settings-body { padding: 0 14px 14px; }
+.memory-settings-body > label { display: block; margin: 1px 0 6px; color: var(--field-label); font-size: 0.69rem; font-weight: 720; }
+.memory-settings-body textarea { min-height: 96px; }
+.memory-settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.memory-settings-footer > span { color: var(--quiet); font-size: 0.61rem; }
+.memory-settings-body .form-status { margin: 7px 0 0; min-height: 0; }
+
 .quick-start {
   margin: 0 0 24px;
   padding: 16px;
@@ -759,6 +772,7 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .metric strong { margin-top: 4px; font-size: 0.77rem; }
 .metric small { margin-top: 1px; color: var(--muted); font-size: 0.59rem; }
 .job-list { display: grid; gap: 8px; }
+.job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: stretch; }
 .empty-list { margin: 10px 0 2px; color: var(--quiet); font-size: 0.7rem; }
 .section-help { max-width: 43ch; }
 .section-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 11px; }
@@ -766,6 +780,8 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .job-card { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-card); color: var(--text); text-align: left; cursor: pointer; }
 .job-card:hover { border-color: var(--line-strong); background: var(--control-hover); }
 .job-card.active { border-color: rgba(var(--cyan-rgb), 0.44); background: rgba(var(--cyan-rgb), 0.07); }
+.session-delete { width: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--control); color: var(--danger-text); cursor: pointer; font-size: 0.61rem; font-weight: 780; }
+.session-delete:hover { border-color: rgba(var(--red-rgb), 0.42); background: rgba(var(--red-rgb), 0.1); }
 .job-state { width: 7px; height: 7px; border-radius: 50%; background: var(--quiet); }
 .job-state.completed, .job-state.success { background: var(--green); }
 .job-state.in_progress, .job-state.running, .job-state.pending, .job-state.queued, .job-state.submitting, .job-state.cancelling { background: var(--accent); box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.5); }
@@ -777,6 +793,18 @@ input[type="range"] { width: 100%; height: 22px; margin: 1px 0 0; accent-color: 
 .job-copy small { margin-top: 2px; }
 .session-toggle { width: 100%; margin-top: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--control); color: var(--muted); cursor: pointer; font-size: 0.67rem; font-weight: 720; }
 .session-toggle:hover { border-color: var(--line-strong); background: var(--control-hover); color: var(--text); }
+
+.confirm-dialog { width: min(430px, calc(100% - 28px)); padding: 24px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--panel-solid); color: var(--text); box-shadow: var(--shadow); }
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.68); backdrop-filter: blur(4px); }
+.confirm-dialog-icon { display: grid; width: 40px; height: 40px; margin-bottom: 14px; place-items: center; border-radius: 12px; background: rgba(var(--red-rgb), 0.12); color: var(--red); font-size: 1.25rem; font-weight: 800; }
+.confirm-dialog h2 { font-size: 1.08rem; }
+.confirm-dialog > p { margin: 8px 0 0; color: var(--muted); font-size: 0.72rem; }
+.confirm-dialog > strong { display: block; margin-top: 13px; overflow: hidden; color: var(--text); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+.confirm-dialog .dialog-status { min-height: 20px; color: var(--red); }
+.confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog-delete-button { min-height: 36px; padding: 7px 12px; border: 1px solid rgba(var(--red-rgb), 0.42); border-radius: 9px; background: rgba(var(--red-rgb), 0.14); color: var(--danger-text); cursor: pointer; font-size: 0.66rem; font-weight: 780; }
+.dialog-delete-button:hover:not(:disabled) { background: rgba(var(--red-rgb), 0.22); }
+.dialog-delete-button:disabled { cursor: wait; opacity: 0.6; }
 
 footer { display: flex; justify-content: space-between; gap: 20px; width: min(1540px, calc(100% - 48px)); margin: 0 auto; padding: 0 0 36px; color: var(--quiet); font-size: 0.63rem; }
 footer p { margin: 0; }

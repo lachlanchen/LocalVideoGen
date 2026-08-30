@@ -50,7 +50,21 @@ from .series_store import (
     SeriesStoreValidationError,
     canonical_series_id,
 )
-from .workflows import PROFILES, RequestError, UploadedAsset, compile_prompt, parse_render_spec, public_config
+from .settings_store import (
+    MAX_SYSTEM_PROMPT_CHARS,
+    SettingsStore,
+    SettingsStoreError,
+    SettingsStoreValidationError,
+)
+from .workflows import (
+    PROFILES,
+    RequestError,
+    UploadedAsset,
+    apply_system_prompt,
+    compile_prompt,
+    parse_render_spec,
+    public_config,
+)
 
 
 LOGGER = logging.getLogger("h3-webapp")
@@ -59,12 +73,14 @@ PROJECT_ROOT = PACKAGE_ROOT.parent
 STATIC_ROOT = PACKAGE_ROOT / "static"
 DEFAULT_JOB_DB = PROJECT_ROOT / "runtime" / "private" / "webapp-jobs.sqlite3"
 DEFAULT_SERIES_DB = PROJECT_ROOT / "runtime" / "private" / "webapp-series.sqlite3"
+DEFAULT_SETTINGS_FILE = PROJECT_ROOT / "runtime" / "private" / "h3-studio-settings.json"
 DEFAULT_SERIES_ARTIFACT_ROOT = PROJECT_ROOT / "runtime" / "private" / "series-artifacts"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "ComfyUI" / "output"
 START_ENGINE_COMMAND = f"cd {PROJECT_ROOT} && H3_CUDA_DEVICES=0,1 ./scripts/start_comfyui.sh"
 COMFY_KEY = web.AppKey("h3.comfy")
 ASSETS_KEY = web.AppKey("h3.assets")
 JOBS_KEY = web.AppKey("h3.jobs")
+SETTINGS_KEY = web.AppKey("h3.settings")
 OUTPUT_ROOT_KEY = web.AppKey("h3.output_root")
 JOB_WATCHER_KEY = web.AppKey("h3.job_watcher")
 SERIES_KEY = web.AppKey("h3.series")
@@ -436,6 +452,11 @@ def _stored_job_summary(record: Mapping[str, Any], client: ComfyClient) -> dict[
             "width": metadata.get("width"),
             "height": metadata.get("height"),
             "duration": metadata.get("duration"),
+            "deletable": (
+                record.get("status") in TERMINAL_STATUSES
+                and not bool(metadata.get("series_id"))
+            ),
+            "managed_by_series": bool(metadata.get("series_id")),
         }
     if record.get("error"):
         result["error"] = str(record["error"])[:1000]
@@ -469,6 +490,34 @@ def _local_output_path(output_root: Path, item: Mapping[str, Any]) -> Path | Non
     except (KeyError, OSError, RuntimeError, ValueError):
         return None
     return candidate if candidate.is_file() else None
+
+
+def _deletable_output_path(output_root: Path, item: Mapping[str, Any]) -> Path | None:
+    """Resolve one stored output without following any symbolic links."""
+
+    try:
+        root = output_root.resolve(strict=True)
+        relative = PurePosixPath(str(item.get("subfolder") or "")) / str(item["filename"])
+        candidate = root / Path(*relative.parts)
+        candidate.relative_to(root)
+        cursor = root
+        for part in relative.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ComfyError(
+                    "This session output is linked to another location and was not deleted.",
+                    status=409,
+                )
+        if not candidate.exists():
+            return None
+        if not candidate.is_file():
+            raise ComfyError("This session output is not a regular file.", status=409)
+        candidate.resolve(strict=True).relative_to(root)
+        return candidate
+    except ComfyError:
+        raise
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
+        raise ComfyError("This session output has an unsafe local location.", status=409) from exc
 
 
 def _job_detail(job: Mapping[str, Any], client: ComfyClient) -> dict[str, Any]:
@@ -514,6 +563,8 @@ async def security_middleware(request: web.Request, handler: Any) -> web.StreamR
     except web.HTTPException as exc:
         response = exc
     _apply_security_headers(response)
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
     if isinstance(response, web.HTTPException):
         raise response
     return response
@@ -528,6 +579,7 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
     except (
         RequestError,
         JobStoreValidationError,
+        SettingsStoreValidationError,
         SeriesStoreValidationError,
         ValueError,
     ) as exc:
@@ -541,6 +593,9 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
     except JobStoreError:
         LOGGER.exception("Durable job registry failure")
         return web.json_response({"error": "the private job registry is unavailable"}, status=503)
+    except SettingsStoreError:
+        LOGGER.exception("Durable studio settings failure")
+        return web.json_response({"error": "the private studio settings are unavailable"}, status=503)
     except SeriesStoreError:
         LOGGER.exception("Durable series registry failure")
         return web.json_response({"error": "the private series registry is unavailable"}, status=503)
@@ -556,6 +611,7 @@ def create_app(
     client: ComfyClient | None = None,
     *,
     job_store: JobStore | None = None,
+    settings_store: SettingsStore | None = None,
     output_root: Path | None = None,
     series_store: SeriesStore | None = None,
     series_media: SeriesMedia | None = None,
@@ -568,6 +624,12 @@ def create_app(
     app[COMFY_KEY] = client or ComfyClient("http://127.0.0.1:8188")
     app[ASSETS_KEY] = AssetRegistry()
     app[JOBS_KEY] = job_store or JobStore(DEFAULT_JOB_DB)
+    settings_path = (
+        app[JOBS_KEY].path.with_name("h3-studio-settings.json")
+        if job_store is not None
+        else DEFAULT_SETTINGS_FILE
+    )
+    app[SETTINGS_KEY] = settings_store or SettingsStore(settings_path)
     app[SUBMISSION_LOCK_KEY] = asyncio.Lock()
     app[OUTPUT_ROOT_KEY] = (output_root or DEFAULT_OUTPUT_ROOT).resolve()
     if series_store is None:
@@ -610,6 +672,9 @@ def create_app(
             PROJECT_ROOT / "ComfyUI" / "input"
             if isinstance(app[COMFY_KEY], ComfyClient)
             else None
+        ),
+        system_prompt_provider=lambda: str(
+            app[SETTINGS_KEY].get()["system_prompt"]
         ),
     )
 
@@ -672,12 +737,17 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @routes.get("/favicon.ico")
+    async def favicon(_: web.Request) -> web.Response:
+        return web.Response(status=204, headers={"Cache-Control": "public, max-age=86400"})
+
     @routes.get("/api/config")
     async def config(_: web.Request) -> web.Response:
         data = public_config()
         data["version"] = __version__
         data["series_api_version"] = SERIES_API_VERSION
         data["engine_start_command"] = START_ENGINE_COMMAND
+        data["limits"]["system_prompt_chars"] = MAX_SYSTEM_PROMPT_CHARS
         data["uploads"] = {
             "multipart_field": "file",
             "kinds": ["image", "video", "audio"],
@@ -814,6 +884,24 @@ def create_app(
             },
         }
         return web.json_response(data)
+
+    @routes.get("/api/settings")
+    async def get_settings(request: web.Request) -> web.Response:
+        return web.json_response(request.app[SETTINGS_KEY].get())
+
+    @routes.put("/api/settings")
+    async def update_settings(request: web.Request) -> web.Response:
+        payload = await request.json(loads=json.loads)
+        if not isinstance(payload, Mapping):
+            raise RequestError("request body must be a JSON object")
+        allowed = {"system_prompt", "preferred_duration"}
+        unknown = set(payload) - allowed
+        if unknown:
+            raise RequestError("unknown studio setting: " + sorted(unknown)[0])
+        if not payload:
+            raise RequestError("provide a studio setting to save")
+        updates = {key: payload[key] for key in allowed if key in payload}
+        return web.json_response(request.app[SETTINGS_KEY].update(**updates))
 
     @routes.get("/api/health")
     async def health(request: web.Request) -> web.Response:
@@ -967,8 +1055,14 @@ def create_app(
         if not isinstance(payload, Mapping):
             raise RequestError("request body must be a JSON object")
         await _require_project_comfy(request)
-        resolved = _resolve_asset_payload(payload, request.app[ASSETS_KEY])
-        spec = parse_render_spec(payload, resolved)
+        remembered = str(request.app[SETTINGS_KEY].get()["system_prompt"])
+        authored_prompt, effective_prompt = apply_system_prompt(
+            payload.get("prompt"), remembered
+        )
+        effective_payload = dict(payload)
+        effective_payload["prompt"] = effective_prompt
+        resolved = _resolve_asset_payload(effective_payload, request.app[ASSETS_KEY])
+        spec = parse_render_spec(effective_payload, resolved)
         model_status, model_note = await _local_model_status()
         if model_status != "verified":
             raise ComfyError(model_note, status=409)
@@ -987,7 +1081,8 @@ def create_app(
         metadata = {
             "mode": spec.mode,
             "profile": spec.profile.id,
-            "prompt": spec.prompt,
+            "prompt": authored_prompt,
+            "system_prompt": remembered,
             "width": spec.width,
             "height": spec.height,
             "duration": spec.duration,
@@ -1315,6 +1410,52 @@ def create_app(
                 raise
             return _cancel_response(stored)
         return web.json_response(result)
+
+    @routes.delete("/api/jobs/{job_id}")
+    async def delete_job(request: web.Request) -> web.Response:
+        job_id = _canonical_uuid(request.match_info["job_id"])
+        stored = request.app[JOBS_KEY].get(job_id)
+        if stored is None:
+            raise web.HTTPNotFound(text="session not found")
+        metadata = stored.get("metadata")
+        if isinstance(metadata, Mapping) and metadata.get("series_id"):
+            raise ComfyError(
+                "This render belongs to a saved video series and must stay with that series.",
+                status=409,
+            )
+        if stored.get("status") in ACTIVE_STATUSES:
+            raise ComfyError(
+                "Wait for this session to finish, or cancel it before deleting it.",
+                status=409,
+            )
+        paths: list[Path] = []
+        missing = 0
+        for item in stored.get("outputs") or []:
+            path = _deletable_output_path(request.app[OUTPUT_ROOT_KEY], item)
+            if path is None:
+                missing += 1
+            else:
+                paths.append(path)
+        deleted_files = 0
+        for path in paths:
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise ComfyError(
+                    "The video could not be removed, so the session was kept.", status=409
+                ) from exc
+            deleted_files += 1
+        deleted = request.app[JOBS_KEY].delete(job_id)
+        if deleted is None:
+            raise web.HTTPNotFound(text="session not found")
+        return web.json_response(
+            {
+                "deleted": True,
+                "id": job_id,
+                "files_deleted": deleted_files,
+                "files_already_missing": missing,
+            }
+        )
 
     @routes.get("/api/jobs/{job_id}/outputs/{output_id}")
     async def output(request: web.Request) -> web.StreamResponse:

@@ -211,7 +211,7 @@ class JobStore:
         except OSError as exc:
             raise JobStoreError("could not prepare the private job registry") from exc
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect_raw(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self.path,
             timeout=5.0,
@@ -222,6 +222,44 @@ class JobStore:
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA trusted_schema = OFF")
         return connection
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a verified registry, rebuilding only a missing/empty database.
+
+        A user may intentionally remove the disposable session history while
+        the studio is running.  SQLite will otherwise recreate a zero-byte
+        database without its schema and every request will fail.  Treat only
+        that clean missing-schema state as a request for a fresh registry;
+        non-empty or partially damaged databases still fail closed.
+        """
+
+        with self._lock:
+            for _ in range(2):
+                self._prepare_path()
+                connection: sqlite3.Connection | None = None
+                try:
+                    connection = self._connect_raw()
+                    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+                    table = connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+                    ).fetchone()
+                    if version == SCHEMA_VERSION and table is not None:
+                        return connection
+                    if version == 0 and table is None:
+                        connection.close()
+                        connection = None
+                        self._initialize()
+                        continue
+                    raise JobStoreCorruptionError("the job registry schema is invalid")
+                except JobStoreError:
+                    if connection is not None:
+                        connection.close()
+                    raise
+                except sqlite3.Error as exc:
+                    if connection is not None:
+                        connection.close()
+                    raise _database_error(exc) from exc
+            raise JobStoreError("the job registry could not be initialized")
 
     def _harden_files(self) -> None:
         try:
@@ -239,7 +277,7 @@ class JobStore:
         with self._lock:
             connection: sqlite3.Connection | None = None
             try:
-                connection = self._connect()
+                connection = self._connect_raw()
                 journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
                 if journal_mode != "wal":
                     raise JobStoreError("the job registry could not enable WAL mode")
@@ -562,3 +600,36 @@ class JobStore:
 
     def active(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return self.list(scope="active", limit=limit)
+
+    def delete(self, job_id: str) -> dict[str, Any] | None:
+        """Atomically remove one registry row and return its former contents."""
+
+        canonical = canonical_job_id(job_id)
+        with self._lock:
+            connection: sqlite3.Connection | None = None
+            try:
+                connection = self._connect()
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT * FROM jobs WHERE job_id = ?", (canonical,)
+                ).fetchone()
+                if row is None:
+                    connection.rollback()
+                    return None
+                record = self._decode_row(row)
+                connection.execute("DELETE FROM jobs WHERE job_id = ?", (canonical,))
+                connection.commit()
+                self._harden_files()
+                return record
+            except JobStoreError:
+                if connection is not None and connection.in_transaction:
+                    connection.rollback()
+                raise
+            except sqlite3.Error as exc:
+                if connection is not None and connection.in_transaction:
+                    connection.rollback()
+                raise _database_error(exc) from exc
+            finally:
+                if connection is not None:
+                    connection.close()
+                self._harden_files()

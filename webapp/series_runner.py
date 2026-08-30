@@ -25,6 +25,7 @@ from .workflows import (
     PROFILES,
     RequestError,
     UploadedAsset,
+    apply_system_prompt,
     aligned_frame_count,
     compile_prompt,
     parse_render_spec,
@@ -970,6 +971,7 @@ class SeriesRunner:
         submission_lock: asyncio.Lock | None = None,
         runtime_check: Callable[[], Awaitable[None]] | None = None,
         submission_check: Callable[[], Awaitable[None]] | None = None,
+        system_prompt_provider: Callable[[], str] | None = None,
         input_root: str | Path | None = None,
     ) -> None:
         self.store = store
@@ -980,6 +982,7 @@ class SeriesRunner:
         self.submission_lock = submission_lock or asyncio.Lock()
         self.runtime_check = runtime_check
         self.submission_check = submission_check or runtime_check
+        self.system_prompt_provider = system_prompt_provider or (lambda: "")
         self.input_root = Path(input_root).resolve() if input_root is not None else None
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -1448,7 +1451,9 @@ class SeriesRunner:
             for record in reference_fingerprints
         ]
         shot = document["shots"][shot_index]
-        prompt_text = self._series_prompt(document, shot_index, labels)
+        authored_prompt = self._series_prompt(document, shot_index, labels)
+        remembered = self.system_prompt_provider()
+        _, prompt_text = apply_system_prompt(authored_prompt, remembered)
         settings = document["settings"]
         payload = {
             "mode": mode,
@@ -1480,7 +1485,8 @@ class SeriesRunner:
             "attempt": attempt_number,
             "mode": spec.mode,
             "profile": spec.profile.id,
-            "prompt": spec.prompt,
+            "prompt": authored_prompt,
+            "system_prompt": remembered,
             "width": spec.width,
             "height": spec.height,
             "duration": spec.duration,

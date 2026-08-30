@@ -117,6 +117,15 @@ H3_AUX_DEVICE=gpu:1 ./scripts/start_webapp.sh
 
 Open <http://127.0.0.1:8190>. ComfyUI remains private at <http://127.0.0.1:8188>.
 
+H3 Studio is designed for beginners as well as repeat use:
+
+- **Always remember** saves optional requirements such as “no subtitles” and adds them to every new single clip and series shot.
+- **Clip length** remembers the last selected duration on this workstation and restores it for a new session or page reload.
+- **Recent sessions** lets you reopen or reuse a render. A finished standalone session has a **Delete** button with an irreversible confirmation; it removes both the session row and its allowlisted generated video. Active renders and series-owned shots are protected from deletion there.
+- If the disposable session database is removed, the running studio initializes a fresh empty history automatically. Remembered requirements and clip length are kept in a separate private settings file.
+
+All of this usage data is local-only. Prompts, settings, sessions, uploads, generated videos, browser profiles, logs, and screenshots are excluded from Git and must never be committed or pushed. Only the reusable tool source, generic tests, and documentation belong in the repository.
+
 The local CLIPLoader selection is reversible and applies to H3 Studio plus all generated
 editable workflows. The selector verifies the chosen weights before changing anything:
 

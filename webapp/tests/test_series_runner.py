@@ -287,6 +287,33 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         lalachan = build_series_document(payload, resolve)
         self.assertEqual(lalachan["settings"]["continuity_seconds"], 3)
 
+    async def test_system_prompt_is_applied_without_hiding_authored_series_prompt(self) -> None:
+        record = self.series.get(self.series_id)
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            system_prompt_provider=lambda: "Never add subtitles. Keep motion gentle.",
+        )
+        self.assertTrue(
+            await runner._submit_shot(
+                self.series_id,
+                record["document"],
+                0,
+                expected_revision=int(record["revision"]),
+            )
+        )
+        submission = self.client.submissions[-1]
+        serialized_graph = str(submission["prompt"])
+        self.assertIn("Never add subtitles. Keep motion gentle.", serialized_graph)
+        self.assertIn("A person enters.", submission["metadata"]["prompt"])
+        self.assertNotIn("Never add subtitles", submission["metadata"]["prompt"])
+        self.assertEqual(
+            submission["metadata"]["system_prompt"],
+            "Never add subtitles. Keep motion gentle.",
+        )
+
     async def test_waits_for_unrelated_job_then_chains_and_stitches(self) -> None:
         unrelated = str(uuid.uuid4())
         self.jobs.register(unrelated, {"mode": "t2v"}, status="pending")

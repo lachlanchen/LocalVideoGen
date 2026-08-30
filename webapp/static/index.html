@@ -8,7 +8,7 @@
     <meta name="description" content="A private local studio for MiniMax H3 video generation on this workstation.">
     <title>H3 Studio · Local Video Generator</title>
     <script src="/static/theme-init.js"></script>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=1.0.0">
   </head>
   <body>
     <a class="skip-link" href="#studio">Skip to generation controls</a>
@@ -66,6 +66,23 @@
             <small>LALACHAN, travel, or your movie</small>
           </button>
         </nav>
+
+        <details class="memory-settings" id="alwaysRememberPanel">
+          <summary>
+            <span aria-hidden="true">◎</span>
+            <strong>Always remember</strong>
+            <small>Optional rules automatically added to every clip and series shot.</small>
+          </summary>
+          <div class="memory-settings-body">
+            <label for="systemPrompt">Requirements to keep for every video</label>
+            <textarea id="systemPrompt" rows="4" maxlength="2000" spellcheck="true" placeholder="Example: Never add subtitles. Keep the camera steady. Always use gentle background music."></textarea>
+            <div class="memory-settings-footer">
+              <span id="systemPromptCount">0 / 2,000</span>
+              <button class="secondary-button" id="saveSystemPrompt" type="button">Save requirements</button>
+            </div>
+            <p class="form-status" id="systemPromptStatus" role="status" aria-live="polite">Saved on this workstation, separately from sessions.</p>
+          </div>
+        </details>
 
         <div id="singleComposer">
         <aside class="quick-start" aria-labelledby="quickStartTitle">
@@ -182,7 +199,7 @@
                 <output for="duration" id="durationLabel">5.0 s</output>
               </div>
               <input id="duration" name="duration" type="range" min="5" max="15" step="0.5" value="5">
-              <p class="field-hint"><span id="frameCount">124 frames</span> · <span id="actualDuration">actual 5.17 s</span> at 24 fps</p>
+              <p class="field-hint"><span id="frameCount">124 frames</span> · <span id="actualDuration">actual 5.17 s</span> at 24 fps · <span id="durationMemory">remembered for next time</span></p>
             </div>
 
             <details class="advanced-settings span-2">
@@ -492,6 +509,18 @@
       <p>Aligned MiniMax H3 · local 768-short-edge output · 24 fps · native stereo audio</p>
     </footer>
 
+    <dialog class="confirm-dialog" id="deleteSessionDialog" aria-labelledby="deleteSessionTitle" aria-describedby="deleteSessionDescription">
+      <div class="confirm-dialog-icon" aria-hidden="true">×</div>
+      <h2 id="deleteSessionTitle">Delete this session and video?</h2>
+      <p id="deleteSessionDescription">This permanently removes the session from Recent sessions and deletes its generated video file. This cannot be undone.</p>
+      <strong id="deleteSessionName"></strong>
+      <p class="dialog-status" id="deleteSessionStatus" role="status" aria-live="polite"></p>
+      <div class="confirm-dialog-actions">
+        <button class="secondary-button" id="cancelDeleteSession" type="button">Keep session</button>
+        <button class="dialog-delete-button" id="confirmDeleteSession" type="button">Delete permanently</button>
+      </div>
+    </dialog>
+
     <template id="assetTemplate">
       <article class="asset-card">
         <div class="asset-kind" aria-hidden="true"></div>
@@ -500,6 +529,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=1.0.0" defer></script>
   </body>
 </html>

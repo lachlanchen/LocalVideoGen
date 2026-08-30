@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
 import uuid
@@ -239,6 +240,9 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rejected.status, 421)
         self.assertEqual(rejected.headers["X-Frame-Options"], "DENY")
 
+        favicon = await self.client.get("/favicon.ico")
+        self.assertEqual(favicon.status, 204)
+
         invalid = await self.client.get("/api/jobs/not-a-uuid")
         self.assertEqual(invalid.status, 400)
         self.assertEqual(invalid.headers["X-Content-Type-Options"], "nosniff")
@@ -272,7 +276,17 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
         html = await response.text()
-        for element_id in ("quickStartTitle", "newSession", "reuseSession", "jobList", "toggleSessions"):
+        for element_id in (
+            "quickStartTitle",
+            "newSession",
+            "reuseSession",
+            "jobList",
+            "toggleSessions",
+            "systemPrompt",
+            "saveSystemPrompt",
+            "deleteSessionDialog",
+            "confirmDeleteSession",
+        ):
             self.assertIn(f'id="{element_id}"', html)
         self.assertIn("Make your first clip in three steps", html)
         self.assertIn("Recent sessions", html)
@@ -280,11 +294,74 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
 
         app_script = await self.client.get("/static/app.js")
         self.assertEqual(app_script.status, 200)
+        self.assertEqual(app_script.headers["Cache-Control"], "no-cache")
         script = await app_script.text()
         self.assertIn("function resetSingleSession()", script)
         self.assertIn("function reuseActiveSession()", script)
         self.assertIn("sessionStatusLabel", script)
         self.assertIn("state.jobs.slice(0, 6)", script)
+        self.assertIn("function deletePendingSession()", script)
+        self.assertIn("function savePreferredDuration", script)
+        self.assertIn("function saveRememberedRequirements()", script)
+        self.assertNotIn("function saveSystemPrompt()", script)
+        self.assertIn('api("/api/settings"', script)
+
+    async def test_settings_survive_deleted_session_database_and_apply_to_render(self) -> None:
+        saved = await self.client.put(
+            "/api/settings",
+            json={
+                "system_prompt": "Never add subtitles. Keep the camera steady.",
+                "preferred_duration": 7.5,
+            },
+        )
+        self.assertEqual(saved.status, 200, await saved.text())
+        self.assertEqual((await saved.json())["preferred_duration"], 7.5)
+
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(f"{self.store.path}{suffix}")
+            if candidate.exists():
+                candidate.unlink()
+        history = await self.client.get("/api/jobs?scope=all&limit=24")
+        self.assertEqual(history.status, 200, await history.text())
+        self.assertEqual((await history.json())["jobs"], [])
+        settings = await self.client.get("/api/settings")
+        self.assertEqual((await settings.json())["preferred_duration"], 7.5)
+
+        payload = {
+            "mode": "t2v",
+            "profile": "preview_int8_turbo_dual",
+            "prompt": "A paper boat crosses a puddle.",
+            "width": 864,
+            "height": 480,
+            "duration": 2,
+            "seed": "17",
+        }
+        response = await self.client.post("/api/renders", json=payload)
+        self.assertEqual(response.status, 202, await response.text())
+        body = await response.json()
+        submission = self.comfy.submissions[-1]
+        serialized_graph = json.dumps(submission["prompt"])
+        self.assertIn("Never add subtitles. Keep the camera steady.", serialized_graph)
+        self.assertIn(payload["prompt"], serialized_graph)
+        metadata = self.store.get(body["id"])["metadata"]
+        self.assertEqual(metadata["prompt"], payload["prompt"])
+        self.assertEqual(
+            metadata["system_prompt"],
+            "Never add subtitles. Keep the camera steady.",
+        )
+
+    async def test_settings_validation_is_clear_and_bounded(self) -> None:
+        bad_duration = await self.client.put(
+            "/api/settings", json={"preferred_duration": 2.25}
+        )
+        self.assertEqual(bad_duration.status, 400)
+        self.assertIn("0.5 second", (await bad_duration.json())["error"])
+        unknown = await self.client.put("/api/settings", json={"mystery": True})
+        self.assertEqual(unknown.status, 400)
+        too_long = await self.client.put(
+            "/api/settings", json={"system_prompt": "x" * 2001}
+        )
+        self.assertEqual(too_long.status, 400)
 
     async def test_studio_exposes_the_guided_series_workspace(self) -> None:
         response = await self.client.get("/")
@@ -708,6 +785,81 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(ranged.status, 206)
         self.assertEqual(await ranged.read(), b"2345")
+
+    async def test_delete_session_removes_allowlisted_video_and_registry_row(self) -> None:
+        job_id = str(uuid.uuid4())
+        folder = self.output_root / "h3"
+        folder.mkdir()
+        media = folder / "delete-me.mp4"
+        media.write_bytes(b"temporary-video")
+        self.store.register(
+            job_id,
+            {"mode": "t2v", "prompt": "Temporary deletion test"},
+            status="completed",
+        )
+        self.store.update(
+            job_id,
+            outputs=[{
+                "id": 0,
+                "filename": media.name,
+                "subfolder": "h3",
+                "type": "output",
+                "media_type": "video",
+                "node_id": "42",
+            }],
+        )
+        history = await self.client.get("/api/jobs")
+        session = (await history.json())["jobs"][0]["session"]
+        self.assertTrue(session["deletable"])
+        self.assertFalse(session["managed_by_series"])
+
+        response = await self.client.delete(f"/api/jobs/{job_id}")
+        self.assertEqual(response.status, 200, await response.text())
+        body = await response.json()
+        self.assertEqual(body["files_deleted"], 1)
+        self.assertFalse(media.exists())
+        self.assertIsNone(self.store.get(job_id))
+
+    async def test_delete_protects_active_series_and_symlinked_outputs(self) -> None:
+        active_id = str(uuid.uuid4())
+        self.store.register(active_id, {"prompt": "active"}, status="pending")
+        active = await self.client.delete(f"/api/jobs/{active_id}")
+        self.assertEqual(active.status, 409)
+        self.assertTrue(self.store.owns(active_id))
+
+        series_id = str(uuid.uuid4())
+        series_job_id = str(uuid.uuid4())
+        self.store.register(
+            series_job_id,
+            {"prompt": "shot", "series_id": series_id},
+            status="completed",
+        )
+        series = await self.client.delete(f"/api/jobs/{series_job_id}")
+        self.assertEqual(series.status, 409)
+        self.assertTrue(self.store.owns(series_job_id))
+
+        target = self.output_root / "precious.mp4"
+        target.write_bytes(b"keep")
+        link = self.output_root / "linked.mp4"
+        link.symlink_to(target)
+        linked_id = str(uuid.uuid4())
+        self.store.register(linked_id, {"prompt": "linked"}, status="completed")
+        self.store.update(
+            linked_id,
+            outputs=[{
+                "id": 0,
+                "filename": link.name,
+                "subfolder": "",
+                "type": "output",
+                "media_type": "video",
+                "node_id": "42",
+            }],
+        )
+        linked = await self.client.delete(f"/api/jobs/{linked_id}")
+        self.assertEqual(linked.status, 409)
+        self.assertTrue(link.exists())
+        self.assertEqual(target.read_bytes(), b"keep")
+        self.assertTrue(self.store.owns(linked_id))
 
     async def test_stream_proxy_forces_media_type_and_wire_security_headers(self) -> None:
         job_id = str(uuid.uuid4())
