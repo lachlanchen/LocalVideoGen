@@ -14,6 +14,8 @@
 
 LocalVideoGen ist eine reproduzierbare Betriebsschicht um eine extern installierte, fest versionierte ComfyUI-Umgebung und das offizielle ausgerichtete MiniMax-H3-Modellpaket. Enthalten sind die nur über Loopback erreichbare Webapp H3 Studio, prüfsummengesteuerter Modellbezug, T2V/I2V/R2V-Workflows, gemeinsame native Video- und Audioerzeugung, dauerhafte Auftragsprotokolle sowie konservative Lebenszyklusregeln für zwei RTX 4090 mit je 24 GiB und 128 GiB Host-RAM.
 
+Für lange visuelle Referenzen gilt das Preset **Long reference · 24 GiB safe**: `quality_int8_offload`, `match` und 704×1248 im Hoch- oder 1248×704 im Querformat. Eine Zulassungsprüfung kontrolliert Abmessungen und Referenzlast und stoppt einen unsicheren Auftrag vor der GPU-Übermittlung.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ Der [Leitfaden zum Serien-Workflow](../docs/series-workflow.md) beschreibt Konti
 
 ## Leistungsumfang
 
-- Höchste Qualitätsstufe: beschnittenes BF16 Ref2VA/FL2VA DiT, ausgerichteter NVFP4-AWQ Qwen3-VL-Conditioner, FP16-Video-VAE, FP32-Audio-VAE und 25 Vollmodellschritte.
-- Stufenverteilung auf zwei GPUs: GPU 0 führt DiT und Denoising aus; GPU 1 übernimmt Qwen-Conditioning sowie Video-/Audio-VAE. Ein PCIe-Peer-to-Peer-Pfad wird nicht vorausgesetzt.
+- Höchste BF16-Treue gilt für kurze visuelle Videoreferenzen oder reines Bild-R2V; lange Videoreferenzen verwenden standardmäßig den gemessenen, für 24 GiB sicheren INT8/Offload-Pfad.
+- Auf der gemeinsam genutzten Workstation führt GPU 0 standardmäßig alle H3-Stufen aus; GPU 1 bleibt für LocalLLM frei. Nur ein explizites `H3_AUX_DEVICE=gpu:1` verlagert Qwen- und Referenz-VAE-Arbeit auf GPU 1.
 - Lokales T2V, I2V und R2V mit mehreren Referenzen, einschließlich Max-Identity-Profil und nativ synchronisiertem Audio.
 - Profile für Qualität, Ein-GPU-Rückfall und niedrig aufgelöste INT8-Turbo-Vorschau.
 - Lokales H3 liefert bei 24 fps bis zu 768 Pixel an der kurzen Kante. MiniMax' separate 2K-Regenerierung ist nur per API verfügbar und wird nicht als lokale Funktion dargestellt.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[Upload- und Graphvalidierung]
     V --> J[(Private Auftragsdatenbank)]
     V -->|Loopback :8188| C[Fest versioniertes ComfyUI]
-    C --> G0[GPU 0: DiT + Denoising]
-    C --> G1[GPU 1: Qwen + Video/Audio-VAE]
+    C --> G0[GPU 0: standardmäßig alle H3-Stufen]
+    G1[GPU 1: standardmäßig für LocalLLM reserviert]
+    C -. optionales H3_AUX_DEVICE .-> G1
     C <--> R[Host-RAM: DynamicVRAM + asynchrones Offloading]
     M[SHA-256-geprüftes Modellpaket] --> C
 ```

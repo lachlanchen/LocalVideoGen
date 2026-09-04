@@ -10,6 +10,8 @@ const state = {
   durationSaveVersion: 0,
   pendingDeleteJobId: null,
   mode: "t2v",
+  modeSettings: {},
+  safetyMessageActive: false,
   health: null,
   uploading: 0,
   assets: {
@@ -272,6 +274,7 @@ function updateDuration() {
   elements.durationLabel.textContent = `${seconds.toFixed(1)} s`;
   elements.frameCount.textContent = `${frames} frames`;
   elements.actualDuration.textContent = `actual ${(frames / 24).toFixed(2)} s`;
+  validateForm();
 }
 
 function updateSystemPromptCount() {
@@ -316,6 +319,8 @@ async function savePreferredDuration({ announce = false } = {}) {
     if (version !== state.durationSaveVersion) return;
     elements.durationMemory.textContent = "could not save";
     if (announce) setFormMessage(error.message, "error");
+  } finally {
+    if (version === state.durationSaveVersion) validateForm();
   }
 }
 
@@ -417,7 +422,46 @@ function setupConfig(config) {
 
 function setMode(modeId) {
   if (!state.config?.modes.some((mode) => mode.id === modeId)) return;
+  const changingMode = state.mode !== modeId;
+  const enteringReferenceMode = changingMode && modeId === "r2v";
+  const leavingReferenceMode = changingMode && state.mode === "r2v";
+  if (changingMode) {
+    const current = {
+      profile: elements.profile.value,
+      refImageSize: elements.refImageSize.value,
+      duration: elements.duration.value,
+      resolution: elements.resolution.value,
+      width: elements.width.value,
+      height: elements.height.value,
+    };
+    state.modeSettings[state.mode] = current;
+    if (enteringReferenceMode) state.modeSettings.beforeR2V = current;
+  }
   state.mode = modeId;
+  const remembered = changingMode
+    ? state.modeSettings[modeId] || (leavingReferenceMode ? state.modeSettings.beforeR2V : null)
+    : null;
+  if (remembered) {
+    elements.profile.value = remembered.profile;
+    elements.refImageSize.value = remembered.refImageSize;
+    elements.duration.value = remembered.duration;
+    elements.resolution.value = remembered.resolution;
+    elements.width.value = remembered.width;
+    elements.height.value = remembered.height;
+    updateProfile();
+    updateResolution();
+  } else if (enteringReferenceMode && state.config.long_reference) {
+    const safe = state.config.long_reference;
+    elements.profile.value = safe.profile;
+    elements.refImageSize.value = safe.ref_image_size;
+    elements.duration.value = String(safe.duration);
+    const orientation = Number(elements.height.value) > Number(elements.width.value)
+      ? safe.portrait
+      : safe.landscape;
+    if (orientation?.resolution) elements.resolution.value = orientation.resolution;
+    updateProfile();
+    updateResolution();
+  }
   for (const button of $$(".mode-tab", elements.modeTabs)) {
     const active = button.dataset.mode === modeId;
     button.setAttribute("aria-selected", String(active));
@@ -468,6 +512,12 @@ function parseSeed() {
 function validateForm({ announce = false } = {}) {
   if (!state.config) return false;
   let message = "";
+  let safetyFailure = false;
+  const rejectSafety = (detail) => {
+    const error = new Error(detail);
+    error.safety = true;
+    throw error;
+  };
   try {
     if (!elements.prompt.value.trim()) throw new Error("Write a scene and sound prompt first.");
     if (state.mode === "i2v" && !state.assets.first_frame) throw new Error("Image-to-video needs a first frame.");
@@ -480,6 +530,40 @@ function validateForm({ announce = false } = {}) {
       throw new Error("Canvas dimensions must be multiples of 32 between 256 and 1344.");
     }
     if (width * height > 768 * 1344) throw new Error("Canvas area exceeds H3’s local 768-short-edge limit.");
+    const safe = state.config.long_reference;
+    const length = alignedFrames(Number(elements.duration.value));
+    if (state.mode === "r2v" && state.assets.ref_videos.length && safe) {
+      const isLong = length >= safe.minimum_length;
+      if (isLong && elements.profile.value !== safe.profile) {
+        rejectSafety("Choose “Long reference · 24 GiB safe” under Speed & quality for a clip of 243 aligned frames or more.");
+      }
+      if (isLong && elements.refImageSize.value !== safe.ref_image_size) {
+        rejectSafety("Choose “Match video size · faster” under Advanced options → Reference matching for a clip of 243 aligned frames or more.");
+      }
+      let videoPixels = 0;
+      for (const reference of state.assets.ref_videos) {
+        const refWidth = Number(reference.metadata?.width);
+        const refHeight = Number(reference.metadata?.height);
+        if (!Number.isInteger(refWidth) || !Number.isInteger(refHeight) || refWidth < 1 || refHeight < 1) {
+          rejectSafety("A file under References → Videos is missing trusted dimensions. Remove it and add it there again.");
+        }
+        if (refWidth > safe.video_reference.max_edge || refHeight > safe.video_reference.max_edge || refWidth * refHeight > safe.video_reference.max_pixels || refWidth % 32 || refHeight % 32) {
+          rejectSafety("A file under References → Videos is outside the safe normalized size. Remove it and add it there again.");
+        }
+        videoPixels += refWidth * refHeight;
+      }
+      const additionalStillPixels = elements.refImageSize.value === "match"
+        ? Math.max(0, state.assets.ref_images.length - 1) * width * height
+        : 0;
+      const combined = length * (width * height + videoPixels) + additionalStillPixels;
+      if (combined > safe.frame_pixel_limit) {
+        rejectSafety(`R2V reference load is ${combined.toLocaleString()} proxy pixels, above the 24 GiB safe limit. Shorten Clip length, choose a smaller Video size, or remove a file under References → Videos/Pictures.`);
+      }
+      const audioCount = state.assets.ref_audios.length + state.assets.ref_videos.filter((reference) => reference.soundtrack || reference.metadata?.has_audio).length;
+      if (isLong && audioCount > Number(safe.reference_mix?.long_audio_conditioning_max ?? 1)) {
+        rejectSafety("A long visual-video clip accepts one actual audio input. Remove extra files under References → Audio or remove a video's attached soundtrack.");
+      }
+    }
     parseSeed();
     if (state.uploading) throw new Error(`${state.uploading} upload${state.uploading === 1 ? " is" : "s are"} still processing.`);
     if (!state.health?.connected) throw new Error("Start the verified ComfyUI engine before rendering.");
@@ -488,9 +572,13 @@ function validateForm({ announce = false } = {}) {
     if (profileNeedsTwoGpus(profile) && deviceCount() < 2) throw new Error("This profile needs both RTX 4090 GPUs.");
   } catch (error) {
     message = error.message;
+    safetyFailure = error.safety === true;
   }
   elements.renderButton.disabled = Boolean(message);
-  if (announce) setFormMessage(message, message ? "error" : "");
+  if (announce || safetyFailure || state.safetyMessageActive) {
+    setFormMessage(message, message ? "error" : "");
+  }
+  state.safetyMessageActive = safetyFailure;
   return !message;
 }
 
@@ -583,8 +671,11 @@ async function attachSoundtrack(index) {
       state.assets.ref_videos[index].soundtrack = record;
       renderReferences();
       setFormMessage(`Soundtrack attached to ${state.assets.ref_videos[index].name}.`, "success");
+      validateForm();
     } catch (error) {
       setFormMessage(error.message, "error");
+    } finally {
+      validateForm();
     }
   }, { once: true });
   input.click();
@@ -666,6 +757,7 @@ function clearReferences() {
   $$('input[data-list]').forEach((input) => { input.value = ""; });
   renderReferences();
   setFormMessage("Reference handles cleared from this browser session.");
+  validateForm({ announce: true });
 }
 
 function clearKeyframes() {
@@ -1307,7 +1399,7 @@ function setupSeriesConfig(config) {
     option.dataset.requiresTwoGpus = String(profileNeedsTwoGpus(profile));
     elements.seriesProfile.append(option);
   }
-  elements.seriesProfile.value = config.defaults.profile;
+  elements.seriesProfile.value = config.long_reference?.profile || config.defaults.profile;
 
   elements.seriesResolution.replaceChildren();
   for (const resolution of config.resolutions) {
@@ -1318,7 +1410,10 @@ function setupSeriesConfig(config) {
     option.dataset.height = String(resolution.height);
     elements.seriesResolution.append(option);
   }
-  elements.seriesResolution.value = config.resolutions.find((item) => item.width === config.defaults.width && item.height === config.defaults.height)?.id || config.resolutions[0]?.id;
+  elements.seriesResolution.value = config.long_reference?.landscape?.resolution
+    || config.resolutions.find((item) => item.width === config.defaults.width && item.height === config.defaults.height)?.id
+    || config.resolutions[0]?.id;
+  elements.seriesRefImageSize.value = config.long_reference?.ref_image_size || "match";
 
   restoreSeriesDraft();
   if (!state.series.shots.length) state.series.shots = defaultSeriesShots(state.series.template);
@@ -2040,7 +2135,7 @@ function renderSeriesShots() {
       continuity.className = "shot-continuity-note";
       const seconds = Number(elements.seriesContinuity.value || 3);
       continuity.textContent = seconds
-        ? `${isWorldTravel() ? "P9 is" : "Automatically receives"} the previous shot's exact final frame; its last ${seconds} seconds also carry movement and stereo sound.`
+        ? `${isWorldTravel() ? "P9 is" : "Automatically receives"} the previous shot's exact final frame; its last ${seconds} seconds carry movement. From 243 aligned frames, tail sound is used only when no other audio conditioning exists; shorter shots retain it alongside guides for legacy compatibility.`
         : "Continuity handoff is currently off.";
       body.append(continuity);
     }
@@ -2146,7 +2241,15 @@ function seriesReferenceMapForShot(shotIndex) {
   const continuitySeconds = Number(elements.seriesContinuity.value);
   if (shotIndex > 0 && continuitySeconds) {
     if (!isWorldTravel()) pictureLabels.push([pictureLabels.length + 1, "previous shot's exact final frame"]);
-    videos.push([`previous shot's final ${continuitySeconds} seconds`, "stereo audio from the previous shot continuity tail"]);
+    const existingAudioCount = videos.filter(([, audioLabel]) => audioLabel).length + state.series.extras.audio.length;
+    const minimumLength = Number(state.config?.long_reference?.minimum_length ?? 243);
+    const shotLength = alignedFrames(Number(state.series.shots[shotIndex]?.duration));
+    videos.push([
+      `previous shot's final ${continuitySeconds} seconds`,
+      shotLength < minimumLength || existingAudioCount === 0
+        ? "stereo audio from the previous shot continuity tail"
+        : null,
+    ]);
   }
 
   const labels = pictureLabels.map(([ordinal, label, logicalOrdinal = ordinal]) => {
@@ -2224,10 +2327,14 @@ function unresolvedSeriesPromptTags() {
   const sharedAudio = state.series.extras.audio.length + state.series.extras.videos.filter((asset) => asset.soundtrack || asset.metadata?.has_audio).length;
   state.series.shots.forEach((shot, shotIndex) => {
     const hasContinuity = shotIndex > 0 && continuitySeconds > 0;
+    const minimumLength = Number(state.config?.long_reference?.minimum_length ?? 243);
+    const continuityHasAudio = hasContinuity && (
+      alignedFrames(Number(shot.duration)) < minimumLength || sharedAudio === 0
+    );
     const limits = {
       picture: sharedPictures + (hasContinuity ? 1 : 0),
       video: sharedVideos + (hasContinuity ? 1 : 0),
-      audio: sharedAudio + (hasContinuity ? 1 : 0),
+      audio: sharedAudio + (continuityHasAudio ? 1 : 0),
     };
     const worldPictures = new Set();
     if (isWorldTravel()) {
@@ -2292,6 +2399,77 @@ function seriesDraftChecks() {
   const overBudgetShot = state.series.shots.findIndex((shot, index) => composedSeriesPromptLength(shot, index) > 12000);
   if (overBudgetShot >= 0) {
     add("error", `Shot ${overBudgetShot + 1} exceeds the final prompt budget`, "Shorten its direction or the global Story note. The 12,000-character check includes continuity guidance and the reference map.");
+  }
+
+  const safe = state.config?.long_reference;
+  const seriesResolution = elements.seriesResolution.selectedOptions[0];
+  const seriesWidth = Number(seriesResolution?.dataset.width);
+  const seriesHeight = Number(seriesResolution?.dataset.height);
+  const continuityEnabled = Number(elements.seriesContinuity.value) > 0;
+  let missingVideoDimensions = false;
+  let invalidVideoDimensions = false;
+  const sharedVideoPixels = state.series.extras.videos.reduce((total, reference) => {
+    const width = Number(reference.metadata?.width);
+    const height = Number(reference.metadata?.height);
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+      missingVideoDimensions = true;
+      return total;
+    }
+    if (safe && (width > safe.video_reference.max_edge || height > safe.video_reference.max_edge || width * height > safe.video_reference.max_pixels || width % 32 || height % 32)) {
+      invalidVideoDimensions = true;
+    }
+    return total + width * height;
+  }, 0);
+  if (safe) {
+    const sharedAudioCount = state.series.extras.audio.length + state.series.extras.videos.filter((reference) => reference.soundtrack || reference.metadata?.has_audio).length;
+    const referenceLoads = state.series.shots
+      .map((shot, index) => {
+        const length = alignedFrames(Number(shot.duration));
+        const continuityPixels = index > 0 && continuityEnabled
+          ? Number(safe.video_reference?.max_pixels || 0)
+          : 0;
+        const hasVisualVideo = sharedVideoPixels > 0 || continuityPixels > 0;
+        const imageCount = seriesReferenceMapForShot(index).filter((label) => /^<Picture\s+/i.test(label)).length;
+        const additionalStillPixels = elements.seriesRefImageSize.value === "match"
+          ? Math.max(0, imageCount - 1) * seriesWidth * seriesHeight
+          : 0;
+        return {
+          index,
+          load: hasVisualVideo
+            ? length * (seriesWidth * seriesHeight + sharedVideoPixels + continuityPixels) + additionalStillPixels
+            : 0,
+          long: hasVisualVideo && length >= safe.minimum_length,
+          imageCount,
+          audioCount: sharedAudioCount + (
+            index > 0
+            && continuityEnabled
+            && (length < Number(safe.minimum_length) || sharedAudioCount === 0)
+              ? 1
+              : 0
+          ),
+        };
+      });
+    const longVisualVideo = referenceLoads.find((item) => item.long);
+    const unsafeLoad = referenceLoads.find((item) => item.load > safe.frame_pixel_limit);
+    if (longVisualVideo && elements.seriesProfile.value !== safe.profile) {
+      add("error", `Shot ${longVisualVideo.index + 1} needs the long-reference profile`, "Choose “Long reference · 24 GiB safe” under Step 1 → Quality for a visual-video shot of 243 aligned frames or more.");
+    }
+    if (longVisualVideo && elements.seriesRefImageSize.value !== safe.ref_image_size) {
+      add("error", `Shot ${longVisualVideo.index + 1} needs reference matching`, "Choose “Match canvas · long-reference safe” under Step 4 → Reference fidelity.");
+    }
+    if (missingVideoDimensions) {
+      add("error", "A video reference is missing trusted dimensions", "Remove it and add it again under Step 2 → Reference video so H3 Studio can normalize it safely.");
+    }
+    if (invalidVideoDimensions) {
+      add("error", "A video reference is outside the normalized H3 contract", "Remove it and add it again under Step 2 → Reference video to obtain a safe 32-pixel-aligned copy.");
+    }
+    if (unsafeLoad) {
+      add("error", `Shot ${unsafeLoad.index + 1} exceeds the 24 GiB reference budget`, `${unsafeLoad.load.toLocaleString()} proxy pixels is above ${Number(safe.frame_pixel_limit).toLocaleString()}. Shorten that shot's Duration, choose a smaller Step 4 → Canvas, or remove a Step 2 → Reference video/picture.`);
+    }
+    const unsafeAudio = referenceLoads.find((item) => item.long && item.audioCount > Number(safe.reference_mix?.long_audio_conditioning_max ?? 1));
+    if (unsafeAudio) {
+      add("error", `Shot ${unsafeAudio.index + 1} has too many audio references`, "Keep one actual audio input: remove extra Step 2 → Voice & audio files or a Reference video's attached soundtrack.");
+    }
   }
 
   const unresolvedTags = unresolvedSeriesPromptTags();
@@ -3003,6 +3181,7 @@ function bindEvents() {
   elements.seriesComposer.addEventListener("submit", submitSeries);
   elements.prompt.addEventListener("input", () => { updatePromptCount(); validateForm(); });
   elements.profile.addEventListener("change", () => { updateProfile(); void savePreferredDuration(); });
+  elements.refImageSize.addEventListener("change", () => validateForm());
   elements.resolution.addEventListener("change", updateResolution);
   elements.width.addEventListener("input", () => { elements.resolution.value = "custom"; elements.customDimensions.hidden = false; validateForm(); });
   elements.height.addEventListener("input", () => { elements.resolution.value = "custom"; elements.customDimensions.hidden = false; validateForm(); });

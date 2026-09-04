@@ -1,6 +1,6 @@
 # LocalVideoGen Series API and cross-project client
 
-This contract lets another local project, Python program, shell script, or Codex session create and supervise a maximum-quality H3 video series without controlling the browser. It uses H3 Studio’s existing durable Series API at `http://127.0.0.1:8190`; it does not bypass validation, start services, expose local paths, delete attempts, or allow parallel H3 renders.
+This contract lets another local project, Python program, shell script, or Codex session create and supervise a quality-first H3 video series without controlling the browser. It uses H3 Studio’s existing durable Series API at `http://127.0.0.1:8190`; it does not bypass validation, start services, expose local paths, delete attempts, or allow parallel H3 renders.
 
 The supported stdlib client is [`scripts/localvideogen_series.py`](../scripts/localvideogen_series.py). It has no package dependency beyond Python itself and may also be imported as `scripts.localvideogen_series`.
 
@@ -11,7 +11,8 @@ The supported stdlib client is [`scripts/localvideogen_series.py`](../scripts/lo
 - There is intentionally no bearer password on this single-user loopback API. An upload token is an expiring opaque handle, not authentication. Do not publish tokens, browser profiles, private runtime state, or specs containing private source locations.
 - Reference files are streamed rather than loaded wholly into RAM. The client opens a regular file without following a final symlink, checks its device/inode/size/mtime again after streaming, and refuses a source that changed mid-upload.
 - A visual video reference must be pre-cleaned and inspected before upload. Run [`preflight_reference_subtitles.py`](../scripts/preflight_reference_subtitles.py) on the exact 2–15 second segment, keep its SHA-256 report with the private production manifest, and proceed only on exit status `0`. Prompt-only “no subtitles” cannot remove caption pixels already present in a reference. Use audio-only input when only voice or music continuity is required.
-- Uploads are normalized and bounded by media type. The server records the normalized asset’s SHA-256 provenance, permanently resolves opaque handles when the series is created, and never returns its input path or token in public Series responses.
+- Uploads are normalized and bounded by media type. Every visual video reference requires trusted dimensions at every duration and is fitted to H3-native 32-pixel axes within 1024 px and 589,824 pixels (576×1024 for a 9:16 source). The server records those effective dimensions and SHA-256 provenance, permanently resolves opaque handles when the series is created, and never returns its input path or token in public Series responses.
+- Every video-reference R2V request fails before GPU submission when its base `aligned_frames × (output_pixels + sum(video_reference_pixels))` exceeds 510,000,000. For `ref_image_size: "match"`, the admission proxy then adds `max(0, matched_still_count − 1) × output_pixels`: one output canvas once for each still beyond the calibrated first, including a continuity final frame. From 243 aligned frames (about 9.5 requested seconds), a visual video reference also requires `quality_int8_offload` and match mode. The proxy sums every visual video, including a series continuity tail, so shorter requests cannot bypass it by adding videos. The measured 510M/24 GiB guarantee applies to this match-mode route; an explicit shorter BF16/max mix remains available but is outside the calibrated guarantee.
 - Artifact downloads are possible only after the artifact ID appears in that series’ public durable allowlist. The server resolves it beneath approved output roots; the client rebuilds the endpoint from canonical series/artifact UUIDs, checks the received byte count and SHA-256 against public durable metadata, `fsync`s a sibling temporary, and installs it atomically. No-overwrite mode uses an atomic hard-link claim, so another process cannot win the check/install gap and be clobbered.
 - `run`, `start`, and retry operations use the same shared submission lock and effective profile-aware GPU readiness gate as the web UI. The client never starts or stops ComfyUI or H3 Studio. Start each verified service once with the project lifecycle scripts.
 
@@ -27,6 +28,12 @@ The existing `profiles`, `series.templates`, limits, and defaults remain present
 {
   "series_api_version": 1,
   "series": {
+    "default_settings": {
+      "profile": "quality_int8_offload",
+      "width": 1248,
+      "height": 704,
+      "ref_image_size": "match"
+    },
     "shot_reference_policy": {
       "field": "omit_shared_image_labels",
       "logical_picture_tags_remapped": true,
@@ -42,6 +49,7 @@ The existing `profiles`, `series.templates`, limits, and defaults remain present
         "template": "world_travel",
         "render_mode": "r2v",
         "maximum_quality_profile": "quality_bf16_dual",
+        "long_reference_safe_profile": "quality_int8_offload",
         "picture_slots": {
           "shared": [
             {"slot": 1, "label": "Words card"},
@@ -81,16 +89,18 @@ The existing `profiles`, `series.templates`, limits, and defaults remain present
 
 `continuity_recovery_requires` describes server-managed durable handoff state; it does not authorize client-supplied filesystem paths in create or update payloads.
 
-Before uploading, a maximum-quality World Travel caller should verify all of the following:
+Before uploading, a World Travel caller should verify all of the following:
 
 1. `series_api_version` is `1`.
 2. `world_travel` is in `series.templates` and its capability uses R2V.
 3. The shared slots and labels are exactly P1–P7, the required per-shot scene is P8, and the continuity final frame is P9.
-4. `maximum_quality_profile` identifies a returned profile with `precision: "bf16"`, a stage-selectable `dual_gpu: true` graph, `turbo: false`, and `steps_ref: 25`. The separate `requires_two_gpus` field reports whether the current effective route actually needs two visible devices.
+4. `maximum_quality_profile` identifies the explicit BF16 maximum-fidelity route, while `long_reference_safe_profile` identifies `quality_int8_offload`: INT8, one-GPU/offload, non-Turbo, and 25 R2V steps. The separate `requires_two_gpus` field reports whether the current effective route actually needs two visible devices.
 
 This discovery request does not upload media or start the engine.
 
-The stdlib client performs this preflight automatically before `create`, `update`, or `run` can upload anything. It requires API version 1, the selected profile to exist, and—on World Travel—the exact R2V P1–P9 contract above plus `quality_bf16_dual` as BF16, stage-placement-capable, non-Turbo, 25-step R2V. It refuses a different contract or World Travel profile instead of silently downgrading. It also computes every shot's effective compact picture list, verifies that Robot plus all three travelers remain, and rejects an authored logical picture tag that the shot omits. A direct `upload`, any source-backed create/update/run, and `start` also require a successful deep health result (`connected: true`, `ready: true`, `model_status: "verified"`). Starting an existing series first fetches and preflights that same durable series ID before the costly start request is sent.
+The stdlib client performs this preflight automatically before `create`, `update`, or `run` can upload anything. It requires API version 1, the selected profile to exist, and—on World Travel—the exact R2V P1–P9 contract above plus both advertised 25-step quality profiles. Omitted settings choose `quality_int8_offload`; an explicit `quality_bf16_dual` remains available for a short visual-video run, or for an image-only maximum-fidelity Series with continuity turned off. Other World Travel profiles are rejected. The client also computes every shot's effective compact picture list, verifies that Robot plus all three travelers remain, and rejects an authored logical picture tag that the shot omits. A direct `upload`, any source-backed `create`/`update`/`run`, and `start` also require a successful deep health result (`connected: true`, `ready: true`, `model_status: "verified"`). Starting an existing series first fetches and preflights that same durable series ID before the costly start request is sent.
+
+Before upload, the stdlib client can count an explicit soundtrack and a persisted video token's advertised `has_audio` metadata. It does not claim to infer an arbitrary local source video's embedded streams by filename alone. After normalization, the server uses trusted probe metadata for the authoritative audio-cardinality check and still rejects an unsafe mix before any GPU render. To make a source-backed long spec fail earlier and unambiguously, demux the intended track as standalone audio and use a silent visual spine.
 
 ## Runtime preparation
 
@@ -114,7 +124,7 @@ Ordinary API requests default to a 120-second socket timeout. Media upload uses 
 | Kind | Accepted source extensions and decoded form | Source limit | Dimensions / rate / duration | Trusted normalized form |
 | --- | --- | --- | --- | --- |
 | image | `.bmp`, `.jpeg`, `.jpg`, `.png`, `.webp`; decoded PNG/JPEG/WebP/BMP, one frame | 30 MiB (31,457,280 bytes) | at most 8192 px on either edge and 40,000,000 pixels | PNG, `image/png` |
-| video | `.avi`, `.m4v`, `.mkv`, `.mov`, `.mp4`, `.webm`; decodable media in that container | 600 MiB (629,145,600 bytes) | 2–15 s; at most 8192 px on either edge and 40,000,000 pixels; source 1–240 fps; at most 32 streams; source audio at most 384 kHz and 32 channels | MP4, H.264, yuv420p, 24 fps, at most 2048 px on either edge; optional AAC stereo at 32 kHz |
+| video | `.avi`, `.m4v`, `.mkv`, `.mov`, `.mp4`, `.webm`; decodable media in that container | 600 MiB (629,145,600 bytes) | 2–15 s; at most 8192 px on either edge and 40,000,000 pixels; source 1–240 fps; at most 32 streams; source audio at most 384 kHz and 32 channels | MP4, H.264, yuv420p, 24 fps, at most 1024 px on either edge and 589,824 pixels; optional AAC stereo at 32 kHz |
 | audio | `.aac`, `.flac`, `.m4a`, `.mp3`, `.ogg`, `.opus`, `.wav`; decodable audio | 100 MiB (104,857,600 bytes) | 0.10–15 s; source at most 384 kHz, 32 channels, and 32 streams | WAV, PCM s16le, stereo, 32 kHz |
 
 Every normalized file must also remain below the 99 MiB (103,809,024-byte) ComfyUI file ceiling. The multipart field is exactly `file`, and `kind` is exactly `image`, `video`, or `audio`. Extension, MIME family, actual decoding, stream structure, and all limits are validated; renaming unsupported bytes does not make them valid.
@@ -138,10 +148,10 @@ The raw **API payload** never accepts a filesystem path:
   "brief": "Series-wide direction and exclusions.",
   "template": "movie",
   "settings": {
-    "profile": "quality_bf16_dual",
-    "width": 1024,
-    "height": 768,
-    "ref_image_size": "max",
+    "profile": "quality_int8_offload",
+    "width": 1248,
+    "height": 704,
+    "ref_image_size": "match",
     "continuity_seconds": 3,
     "advance": true
   },
@@ -157,9 +167,11 @@ The raw **API payload** never accepts a filesystem path:
 }
 ```
 
-If a client spec omits setting values, the helper defaults to the production-quality contract above: `quality_bf16_dual`, 1024×768, `ref_image_size: "max"`, automatic advance, and template-aware continuity. World Travel uses two seconds to reduce repeated shot handles; LALACHAN Series and My Movie use three. It never replaces an explicit 2-, 3-, or 4-second choice and never downgrades an explicitly selected profile. For World Travel, this cross-project client rejects any profile other than `quality_bf16_dual`.
+If a client spec omits setting values, the helper defaults to **Long reference · 24 GiB safe**: `quality_int8_offload`, 1248×704, `ref_image_size: "match"`, automatic advance, and template-aware continuity. World Travel uses two seconds to reduce repeated shot handles; LALACHAN Series and My Movie use three. It never replaces an explicit 2-, 3-, or 4-second choice or an explicitly selected profile. World Travel accepts the advertised safe profile and the explicit BF16 maximum-quality profile.
 
-BF16, the full quality graph, non-Turbo sampling, and 25 R2V steps define maximum *generation fidelity*. Effective device routing is an independent resource choice: the shared-workstation default keeps every H3 stage on GPU 0 with host offload, while `H3_AUX_DEVICE=gpu:1` deliberately uses both GPUs without changing those quality settings. Canvas dimensions are a separate composition choice. The Italy example uses 1024×768 for a stable 4:3 ensemble composition. Choose the advertised 1344×768 preset for a wider native landscape with more horizontal scene area; it uses the same maximum-quality profile and 25 steps, while requiring more pixels and therefore more compute/memory.
+This Series default is distinct from Single Clip duration behavior: entering **Use references** in the browser selects the 14-second safe preset, while a direct `POST /api/renders` R2V request that omits `duration` retains the five-second compatibility default. For direct R2V, the presence of a visual video makes omitted profile/canvas values resolve to `quality_int8_offload` and 1248×704; image/audio-only R2V retains the earlier `quality_bf16_dual` and 1344×768 defaults.
+
+BF16, non-Turbo sampling, and 25 R2V steps still define maximum *generation fidelity*, but BF16/max is not the omitted default for long visual-video conditioning on a 24 GiB GPU. The proven 14-second portrait mapping is 704×1248 output, one normalized visual reference no larger than 576×1024, 345 aligned frames, `quality_int8_offload`, and `ref_image_size: "match"`: 506,603,520 combined frame-pixels. The old 736×1312 output plus 736×1312 reference is 666,286,080 and is rejected. One safe spine nearly fills the 510M budget; a second visual or continuity video may require a shorter duration/smaller canvas or audio-only guidance.
 
 Server limits remain authoritative:
 
@@ -168,10 +180,11 @@ Server limits remain authoritative:
 | `template` | `lalachan`, `world_travel`, or `movie` |
 | `shots` | 2–12 ordered shots; total requested duration at most 180 seconds |
 | `duration` | Validated and aligned by the same 24 fps render-spec compiler as Single Clip |
-| `profile` | A profile returned by `GET /api/config`; maximum quality is `quality_bf16_dual` |
+| `profile` | A profile returned by `GET /api/config`; omitted series use `quality_int8_offload`, while explicit `quality_bf16_dual` maximum fidelity is for a short visual-video shot or image-only Series with continuity off |
 | shared pictures | At most 8 generally; World Travel uses exactly the canonical seven |
 | shared videos | At most 2, reserving H3’s third video slot for the preceding continuity tail |
 | shared audio | At most 3 |
+| long visual-video audio | From 243 aligned frames, at most one effective H3 audio conditioning: each standalone audio and each video soundtrack actually wired counts. Shared-video embedded/override audio or standalone audio takes precedence; only when none exists does the continuity tail's embedded audio count as one. |
 | continuity | 0, 2, 3, or 4 seconds; World Travel defaults to 2, other templates to 3, and explicit values are preserved |
 | per-shot shared pictures | optional `omit_shared_image_labels`; Shot 1 keeps all shared pictures, and World Travel always keeps Robot plus all three cast pictures; the web UI and stdlib helper default the three opening-only labels off after Shot 1 |
 | prompt | Authored shot prompt at most 10,000 characters; composed prompt at most 12,000 |
@@ -205,7 +218,7 @@ Every shot additionally requires one image:
 }
 ```
 
-For that shot, the location image becomes `<Picture 8>`. With continuity enabled, the exact final frame from the previous accepted shot becomes `<Picture 9>`, and its accurate 2–4 second tail occupies the reserved video slot. The scene image controls only that shot’s architecture, terrain, light, atmosphere, and geography. It is not carried into the next destination.
+For that shot, the location image becomes `<Picture 8>`. With continuity enabled, the exact final frame from the previous accepted shot becomes `<Picture 9>`, and its accurate 2–4 second tail occupies the reserved video slot. From 243 aligned frames, a shared video's embedded/override soundtrack or standalone audio wins and the continuity tail contributes embedded audio only when none exists; this enforces the one-audio long-job cap. Short shots retain the legacy tail-audio-plus-guide ordering and tags. Thus the checked ten-second Italy example's Iran audio guide makes every successor tail visual-only. The scene image controls only that shot’s architecture, terrain, light, atmosphere, and geography. It is not carried into the next destination.
 
 Later shots can keep identity references while removing opening props that otherwise tend to reappear. The web UI checks these three omissions by default, shows the resulting physical H3 map inside each shot card, and lets you uncheck a label when that shot deliberately needs the prop. The stdlib helper applies the same default when a later World Travel shot omits the field. Add or edit the field explicitly in a client spec:
 
@@ -232,7 +245,9 @@ A ready, paused, failed, cancelled, or completed series can set the policy for a
 
 The shot index is zero-based. For a pending shot, set the policy while the series is paused and then `resume`. For an already accepted shot, setting the policy changes only a future attempt; explicitly call `retry` afterward if regeneration is desired. Omitting all flags clears the policy. Existing attempt records, output artifacts, hashes, and their historical reference maps remain unchanged.
 
-On restart or retry, a successor shot advertises and submits P9 and the continuity video only when the durable handoff contains both media paths and valid recorded SHA-256 values for both files. A missing final frame, missing tail, absent digest, malformed digest, or unsafe relative location fails the series before a new GPU attempt is claimed. The accepted prior render remains preserved; retry or regenerate that prior shot to rebuild its verified handoff.
+On restart or retry, a successor shot advertises and submits P9 and the continuity video only when the durable handoff contains both media paths and valid recorded SHA-256 values for both files. Legacy tails without safe normalized metadata are verified against their owned path and recorded hash, then mechanically normalized to the current 32-pixel contract before any GPU job; an identity/runtime check occurs immediately before that recovery upload. If the artifact or hash cannot be trusted, the series fails closed before a new attempt is claimed. The accepted prior render and all attempts remain preserved.
+
+An older `ready` series rejected under the new envelope can be updated with a safe spec (`quality_int8_offload`, `match`, and an admitted canvas). A paused, failed, cancelled, or completed series is never silently changed: keep its ID and artifacts, copy the original client spec, select the safe settings and only the remaining shots, then run `create` to make a separate clone. This migration may re-upload original source references but never requires re-rendering or deleting the preserved attempts merely to make the clone.
 
 Earlier episodes—such as an Iran episode—may be supplied as a shared video or soundtrack for character appearance, motion, and voice timbre. If only voice continuity is needed, demux and upload its audio rather than its video; removing the old episode’s frames is the strongest protection against visual or geographic leakage. World Travel’s server-composed guidance explicitly forbids copying that reference’s country, plot, story direction, action, blocking, landmark, or composition. The current destination’s authored story and per-shot scene reference stay authoritative.
 

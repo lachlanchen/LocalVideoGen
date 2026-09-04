@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import io
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
@@ -20,7 +21,13 @@ from webapp.series_runner import (
     public_series,
 )
 from webapp.series_store import SeriesStore
-from webapp.workflows import AUX_DEVICE_ENV, RequestError, UploadedAsset
+from webapp.workflows import (
+    AUX_DEVICE_ENV,
+    RequestError,
+    UploadedAsset,
+    compile_prompt,
+    parse_render_spec,
+)
 
 
 class FakeClient:
@@ -186,6 +193,124 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         self.temporary.cleanup()
+
+    async def test_omitted_series_settings_use_long_reference_safe_defaults(self) -> None:
+        document = build_series_document(
+            {
+                "title": "Safe defaults",
+                "template": "movie",
+                "references": {"images": [], "videos": [], "audio": []},
+                "shots": [
+                    {"title": "One", "prompt": "One.", "duration": 10},
+                    {"title": "Two", "prompt": "Two.", "duration": 10},
+                ],
+            },
+            lambda token, kind, optional: None,
+        )
+        self.assertEqual(
+            document["settings"],
+            {
+                "profile": "quality_int8_offload",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "match",
+                "continuity_seconds": 3,
+                "advance": True,
+            },
+        )
+
+    def test_long_successor_continuity_is_preflighted_before_shot_one(self) -> None:
+        payload = {
+            "title": "Unsafe legacy defaults",
+            "template": "movie",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "max",
+                "continuity_seconds": 3,
+            },
+            "references": {"images": [], "videos": [], "audio": []},
+            "shots": [
+                {"title": "One", "prompt": "One.", "duration": 10},
+                {"title": "Two", "prompt": "Two.", "duration": 10},
+            ],
+        }
+        with self.assertRaisesRegex(RequestError, "requires? the quality_int8_offload"):
+            build_series_document(payload, lambda token, kind, optional: None)
+
+    def test_safe_world_travel_continuity_mix_passes_whole_series_admission(self) -> None:
+        _, payload, resolve = self.world_document()
+        payload["settings"].update(
+            {
+                "profile": "quality_int8_offload",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "match",
+                "continuity_seconds": 2,
+            }
+        )
+        for shot in payload["shots"]:
+            shot["duration"] = 10
+        document = build_series_document(payload, resolve)
+        self.assertEqual(document["settings"]["profile"], "quality_int8_offload")
+
+    async def test_retry_rechecks_persisted_whole_series_before_state_change(self) -> None:
+        def unsafe_legacy(document, _):
+            document["settings"]["profile"] = "quality_bf16_dual"
+            document["settings"]["ref_image_size"] = "max"
+            for shot in document["shots"]:
+                shot["duration"] = 10
+                shot["actual_duration"] = 243 / 24
+            document["shots"][0]["status"] = "failed"
+            return document, "failed"
+
+        before = self.series.mutate(self.series_id, unsafe_legacy)
+        with self.assertRaisesRegex(RequestError, "quality_int8_offload"):
+            await self.runner.retry(self.series_id, 0)
+        after = self.series.get(self.series_id)
+        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual(after["status"], "failed")
+        self.assertEqual(self.client.submissions, [])
+
+    async def test_unsafe_legacy_policy_fails_before_dimension_recovery_upload(self) -> None:
+        def unsafe_legacy(document, _):
+            document["settings"].update(
+                {"profile": "quality_bf16_dual", "ref_image_size": "max"}
+            )
+            document["references"]["videos"] = [
+                {
+                    "kind": "video",
+                    "path": "legacy/oversized.mp4",
+                    "name": "oversized.mp4",
+                    "label": "Legacy spine",
+                    "sha256": "a" * 64,
+                    "has_audio": False,
+                }
+            ]
+            for shot in document["shots"]:
+                shot["duration"] = 10
+                shot["actual_duration"] = 243 / 24
+            return document, "paused"
+
+        self.series.mutate(self.series_id, unsafe_legacy)
+        probe = AsyncMock(side_effect=AssertionError("probe must not run"))
+        self.media.probe = probe
+        identity_check = AsyncMock()
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=Path(self.temporary.name) / "input",
+            submission_check=identity_check,
+        )
+
+        with self.assertRaisesRegex(RequestError, "quality_int8_offload"):
+            await runner.preflight_series(self.series_id)
+        probe.assert_not_awaited()
+        identity_check.assert_not_awaited()
+        self.assertEqual(self.client.uploads, [])
 
     @staticmethod
     def output_locator():
@@ -443,6 +568,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
             "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
             "image_sha256": "c" * 64,
@@ -491,6 +618,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
             "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
             "image_sha256": "c" * 64,
@@ -555,6 +684,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
             "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
             "image_sha256": "c" * 64,
@@ -659,6 +790,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
             "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
             "image_sha256": "c" * 64,
@@ -710,6 +843,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "video_path": "h3/tail.mp4",
                 "video_name": "tail.mp4",
                 "video_sha256": "b" * 64,
+                "video_width": 864,
+                "video_height": 640,
                 "image_path": "h3/frame.png",
                 "image_name": "frame.png",
                 # Simulate an older/corrupt durable record with no image hash.
@@ -724,6 +859,196 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["document"]["shots"][1]["attempts"], [])
         self.assertEqual(self.client.submissions, [])
         self.assertIn("before GPU submission", failed["document"]["error"])
+
+    async def test_legacy_resume_backfills_hash_verified_aligned_tail_dimensions(self) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        tail = input_root / "h3" / "tail.mp4"
+        tail.parent.mkdir(parents=True)
+        tail.write_bytes(b"legacy-aligned-tail")
+        digest = hashlib.sha256(tail.read_bytes()).hexdigest()
+
+        def paused_legacy(document, _):
+            document["shots"][0]["status"] = "completed"
+            document["shots"][0]["accepted_attempt"] = 1
+            document["shots"][0]["continuity_input"] = {
+                "video_path": "h3/tail.mp4",
+                "video_name": "tail.mp4",
+                "video_sha256": digest,
+                "image_path": "h3/frame.png",
+                "image_name": "frame.png",
+                "image_sha256": "c" * 64,
+            }
+            return document, "paused"
+
+        self.series.mutate(self.series_id, paused_legacy)
+        self.media.probe = AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 864,
+                        "height": 640,
+                        "avg_frame_rate": "24/1",
+                        "duration": "3.0",
+                    }
+                ],
+                "format": {"duration": "3.0", "format_name": "mov,mp4"},
+            }
+        )
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=input_root,
+        )
+
+        checked = await runner.preflight_series(self.series_id)
+        continuity = checked["document"]["shots"][0]["continuity_input"]
+        self.assertEqual(
+            (continuity["video_width"], continuity["video_height"]), (864, 640)
+        )
+        self.assertEqual(self.client.uploads, [])
+        resumed = runner.resume(self.series_id)
+        self.assertEqual(resumed["status"], "queued")
+
+    async def test_legacy_full_resolution_tail_is_normalized_after_identity_check(self) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        tail = input_root / "h3" / "tail.mp4"
+        tail.parent.mkdir(parents=True)
+        tail.write_bytes(b"legacy-full-resolution-tail")
+        digest = hashlib.sha256(tail.read_bytes()).hexdigest()
+
+        def paused_legacy(document, _):
+            document["shots"][0]["status"] = "completed"
+            document["shots"][0]["accepted_attempt"] = 1
+            document["shots"][0]["continuity_input"] = {
+                "video_path": "h3/tail.mp4",
+                "video_name": "tail.mp4",
+                "video_sha256": digest,
+                "video_width": 1024,
+                "video_height": 768,
+                "image_path": "h3/frame.png",
+                "image_name": "frame.png",
+                "image_sha256": "c" * 64,
+            }
+            return document, "paused"
+
+        self.series.mutate(self.series_id, paused_legacy)
+        self.media.probe = AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1024,
+                        "height": 768,
+                        "avg_frame_rate": "24/1",
+                        "duration": "3.0",
+                    }
+                ],
+                "format": {"duration": "3.0", "format_name": "mov,mp4"},
+            }
+        )
+        prepared = MagicMock()
+        prepared.filename = "normalized.mp4"
+        prepared.content_type = "video/mp4"
+        prepared.metadata = {
+            "sha256": "d" * 64,
+            "width": 864,
+            "height": 640,
+            "has_audio": True,
+        }
+        prepared.open.return_value = io.BytesIO(b"bounded-tail")
+        identity_check = AsyncMock()
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=input_root,
+            submission_check=identity_check,
+        )
+
+        with patch(
+            "webapp.series_runner.prepare_upload",
+            new=AsyncMock(return_value=prepared),
+        ):
+            checked = await runner.preflight_series(self.series_id)
+        identity_check.assert_awaited_once_with()
+        self.assertEqual(len(self.client.uploads), 1)
+        continuity = checked["document"]["shots"][0]["continuity_input"]
+        self.assertEqual(
+            (continuity["video_width"], continuity["video_height"]), (864, 640)
+        )
+        self.assertEqual(continuity["video_sha256"], "d" * 64)
+        self.assertIn("legacy-normalized", continuity["video_path"])
+        prepared.cleanup.assert_called_once_with()
+
+    async def test_legacy_recovery_never_uploads_to_unverified_runtime(self) -> None:
+        input_root = Path(self.temporary.name) / "input"
+        tail = input_root / "h3" / "tail.mp4"
+        tail.parent.mkdir(parents=True)
+        tail.write_bytes(b"legacy-full-resolution-tail")
+        digest = hashlib.sha256(tail.read_bytes()).hexdigest()
+
+        def paused_legacy(document, _):
+            document["shots"][0]["continuity_input"] = {
+                "video_path": "h3/tail.mp4",
+                "video_name": "tail.mp4",
+                "video_sha256": digest,
+                "video_width": 1024,
+                "video_height": 768,
+                "image_path": "h3/frame.png",
+                "image_name": "frame.png",
+                "image_sha256": "c" * 64,
+            }
+            return document, "paused"
+
+        self.series.mutate(self.series_id, paused_legacy)
+        self.media.probe = AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "width": 1024,
+                        "height": 768,
+                        "avg_frame_rate": "24/1",
+                        "duration": "3.0",
+                    }
+                ],
+                "format": {"duration": "3.0", "format_name": "mov,mp4"},
+            }
+        )
+        prepared = MagicMock()
+        prepared.filename = "normalized.mp4"
+        prepared.content_type = "video/mp4"
+        prepared.metadata = {
+            "sha256": "d" * 64,
+            "width": 864,
+            "height": 640,
+            "has_audio": True,
+        }
+        prepared.open.return_value = io.BytesIO(b"bounded-tail")
+        runner = SeriesRunner(
+            self.series,
+            self.jobs,
+            self.client,
+            self.media,
+            input_root=input_root,
+            submission_check=AsyncMock(side_effect=ComfyError("foreign runtime", status=409)),
+        )
+
+        with patch(
+            "webapp.series_runner.prepare_upload",
+            new=AsyncMock(return_value=prepared),
+        ), self.assertRaisesRegex(ComfyError, "foreign runtime"):
+            await runner.preflight_series(self.series_id)
+        self.assertEqual(self.client.uploads, [])
+        preserved = self.series.get(self.series_id)["document"]["shots"][0]["continuity_input"]
+        self.assertEqual(preserved["video_path"], "h3/tail.mp4")
+        prepared.cleanup.assert_called_once_with()
 
     async def test_world_travel_scene_is_private_persistent_and_hash_guarded(
         self,
@@ -1057,12 +1382,17 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reference_map_includes_audio_and_video_soundtrack_labels(self) -> None:
         assets = {
-            "video": UploadedAsset("video", "h3/video.mp4", "video.mp4"),
+            "video": UploadedAsset(
+                "video",
+                "h3/video.mp4",
+                "video.mp4",
+                {"width": 576, "height": 1024, "has_audio": False},
+            ),
             "video-audible": UploadedAsset(
                 "video",
                 "h3/video-audible.mp4",
                 "video-audible.mp4",
-                {"has_audio": True},
+                {"width": 576, "height": 1024, "has_audio": True},
             ),
             "sound": UploadedAsset("audio", "h3/sound.wav", "sound.wav"),
             "voice": UploadedAsset("audio", "h3/voice.wav", "voice.wav"),
@@ -1115,6 +1445,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "video_path": "h3/tail.mp4",
             "video_name": "tail.mp4",
             "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
             "image_path": "h3/frame.png",
             "image_name": "frame.png",
             "image_sha256": "c" * 64,
@@ -1148,7 +1480,7 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RequestError, "without a matching reference"):
             build_series_document(payload, lambda token, kind, optional: None)
 
-    async def test_rejects_audio_tag_that_changes_meaning_after_continuity(self) -> None:
+    async def test_long_audio_tag_stays_stable_when_continuity_has_other_audio(self) -> None:
         voice = UploadedAsset("audio", "h3/voice.wav", "voice.wav")
 
         def resolve(token, kind, optional):
@@ -1161,9 +1493,10 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
             "title": "Stable voice tag",
             "template": "movie",
             "settings": {
-                "profile": "quality_bf16_dual",
+                "profile": "quality_int8_offload",
                 "width": 1024,
                 "height": 768,
+                "ref_image_size": "match",
                 "continuity_seconds": 3,
             },
             "references": {
@@ -1172,12 +1505,127 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "audio": [{"token": "voice", "label": "Hero voice"}],
             },
             "shots": [
-                {"title": "One", "prompt": "Use <Audio 1>.", "duration": 5, "seed": 1},
-                {"title": "Two", "prompt": "Keep <Audio 1>.", "duration": 5, "seed": 2},
+                {"title": "One", "prompt": "Use <Audio 1>.", "duration": 10, "seed": 1},
+                {"title": "Two", "prompt": "Keep <Audio 1>.", "duration": 10, "seed": 2},
             ],
         }
-        with self.assertRaisesRegex(RequestError, "changes meaning between shots"):
-            build_series_document(payload, resolve)
+        document = build_series_document(payload, resolve)
+        first_labels = self.runner._references_for_shot(document, 0)[2]
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        second_labels = self.runner._references_for_shot(document, 1)[2]
+        self.assertIn("<Audio 1> = Hero voice", first_labels)
+        self.assertIn("<Audio 1> = Hero voice", second_labels)
+        self.assertFalse(any("continuity tail" in label for label in second_labels if "Audio" in label))
+
+    async def test_short_continuity_keeps_legacy_audio_two_and_graph_input(self) -> None:
+        voice = UploadedAsset("audio", "h3/voice.wav", "voice.wav")
+        payload = {
+            "title": "Legacy short audio map",
+            "template": "movie",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1024,
+                "height": 768,
+                "ref_image_size": "match",
+                "continuity_seconds": 3,
+            },
+            "references": {
+                "images": [],
+                "videos": [],
+                "audio": [{"token": "voice", "label": "Hero voice"}],
+            },
+            "shots": [
+                {"title": "One", "prompt": "Listen.", "duration": 5, "seed": 1},
+                {"title": "Two", "prompt": "Continue.", "duration": 5, "seed": 2},
+            ],
+        }
+        document = build_series_document(
+            payload,
+            lambda token, kind, optional: voice,
+        )
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        assets, mode, labels = self.runner._references_for_shot(document, 1)
+        self.assertIn(
+            "<Audio 1> = stereo audio from the previous shot continuity tail",
+            labels,
+        )
+        self.assertIn("<Audio 2> = Hero voice", labels)
+        self.assertTrue(assets["ref_videos"][-1].metadata["has_audio"])
+        spec = parse_render_spec(
+            {
+                "mode": mode,
+                "profile": "quality_bf16_dual",
+                "prompt": "Continue.",
+                "width": 1024,
+                "height": 768,
+                "duration": 5,
+                "ref_image_size": "match",
+            },
+            assets,
+        )
+        conditioning = next(
+            node
+            for node in compile_prompt(spec).values()
+            if node["class_type"] == "MiniMaxH3ReferenceToVideo"
+        )
+        self.assertIn("ref_video_audios.ref_video_audio_0", conditioning["inputs"])
+        self.assertIn("ref_audios.ref_audio_0", conditioning["inputs"])
+
+    async def test_continuity_only_preserves_its_audio_in_graph(self) -> None:
+        record = self.series.get(self.series_id)
+        document = record["document"]
+        document["shots"][0]["continuity_input"] = {
+            "video_path": "h3/tail.mp4",
+            "video_name": "tail.mp4",
+            "video_sha256": "b" * 64,
+            "video_width": 864,
+            "video_height": 640,
+            "image_path": "h3/frame.png",
+            "image_name": "frame.png",
+            "image_sha256": "c" * 64,
+        }
+        assets, mode, labels = self.runner._references_for_shot(document, 1)
+        self.assertIn(
+            "<Audio 1> = stereo audio from the previous shot continuity tail",
+            labels,
+        )
+        self.assertTrue(assets["ref_videos"][-1].metadata["has_audio"])
+        spec = parse_render_spec(
+            {
+                "mode": mode,
+                "profile": "quality_bf16_dual",
+                "prompt": "Continue.",
+                "width": 1024,
+                "height": 768,
+                "duration": 5,
+                "ref_image_size": "match",
+            },
+            assets,
+        )
+        conditioning = next(
+            node
+            for node in compile_prompt(spec).values()
+            if node["class_type"] == "MiniMaxH3ReferenceToVideo"
+        )
+        self.assertIn("ref_video_audios.ref_video_audio_0", conditioning["inputs"])
 
     async def test_regenerate_from_here_preserves_attempts(self) -> None:
         # Build a completed-looking chain without running media; retry must only
@@ -1234,6 +1682,8 @@ class SequentialSeriesRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "video_path": "h3/tail.mp4",
                 "video_name": "tail.mp4",
                 "video_sha256": "b" * 64,
+                "video_width": 864,
+                "video_height": 640,
                 "image_path": "h3/frame.png",
                 "image_name": "frame.png",
                 "image_sha256": "c" * 64,

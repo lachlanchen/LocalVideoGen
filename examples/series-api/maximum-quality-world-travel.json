@@ -3,10 +3,10 @@
   "brief": "A single coherent journey from Rome to Florence to Venice, carried by wind turning the patchwork notebook's pages. Preserve exactly one Rara Xia, one Aya Chan, one Sasa Kun and one Zhuangzi Robot with unchanged faces, species, proportions, wardrobe, props, relationships and Mandarin voices. Time moves naturally from dawn to blue hour and screen travel keeps moving forward. The named earlier Iran dialogue reference controls familiar character voice timbre only: never copy its country, architecture, palette, music, ambience, plot, action, blocking, camera or story direction. Each current Picture 8 is authoritative for that shot's Italian geography. Use only the exact quoted Mandarin dialogue, with clean lip sync and no narration, subtitles, labels, UI or extra text. Keep one restrained original travel-music motif below dialogue.",
   "template": "world_travel",
   "settings": {
-    "profile": "quality_bf16_dual",
+    "profile": "quality_int8_offload",
     "width": 1024,
     "height": 768,
-    "ref_image_size": "max",
+    "ref_image_size": "match",
     "continuity_seconds": 2,
     "advance": false
   },

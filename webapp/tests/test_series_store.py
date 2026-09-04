@@ -47,7 +47,12 @@ class SeriesPayloadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.assets = {
             "image-token": UploadedAsset("image", "h3-webapp/image/cast.png", "cast.png"),
-            "video-token": UploadedAsset("video", "h3-webapp/video/opening.mp4", "opening.mp4"),
+            "video-token": UploadedAsset(
+                "video",
+                "h3-webapp/video/opening.mp4",
+                "opening.mp4",
+                {"width": 576, "height": 1024, "has_audio": False},
+            ),
             "audio-token": UploadedAsset("audio", "h3-webapp/audio/voice.flac", "voice.flac"),
         }
 

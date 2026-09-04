@@ -14,6 +14,8 @@
 
 LocalVideoGen es una capa operativa reproducible sobre una instalación externa y fijada de ComfyUI y el paquete oficial alineado de MiniMax H3. Incluye la aplicación web H3 Studio limitada a loopback, descarga de modelos controlada por sumas de verificación, flujos T2V/I2V/R2V, generación nativa conjunta de vídeo y audio, historial persistente y controles conservadores del ciclo de vida, ajustados para dos RTX 4090 de 24 GiB y 128 GiB de RAM.
 
+Para referencias visuales largas, usa **Long reference · 24 GiB safe**: `quality_int8_offload`, `match` y 704×1248 vertical o 1248×704 horizontal. La admisión previa comprueba dimensiones y carga de referencias y rechaza un trabajo inseguro antes de enviarlo a la GPU.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ Consulta la [guía del flujo de series](../docs/series-workflow.md) para conocer
 
 ## Qué ofrece
 
-- Perfil de máxima calidad: DiT Ref2VA/FL2VA podado en BF16, acondicionador Qwen3-VL NVFP4-AWQ alineado, VAE de vídeo FP16, VAE de audio FP32 y 25 pasos del modelo completo.
-- Distribución por etapas entre dos GPU: GPU 0 ejecuta DiT y denoising; GPU 1 ejecuta el condicionamiento Qwen y los VAE de vídeo/audio. No presupone un enlace PCIe peer-to-peer.
+- La máxima fidelidad BF16 se reserva para referencias visuales de vídeo cortas o R2V solo con imágenes; los vídeos de referencia largos usan por defecto la ruta INT8/offload medida y segura para 24 GiB.
+- En la estación compartida, GPU 0 ejecuta por defecto todas las etapas H3 y GPU 1 queda libre para LocalLLM. Solo `H3_AUX_DEVICE=gpu:1` explícito mueve Qwen y el VAE de referencia a GPU 1.
 - T2V, I2V y R2V multirreferencia locales, con perfil de máxima identidad y audio nativo sincronizado.
 - Perfiles de calidad, respaldo con una sola GPU y vista previa INT8 Turbo de baja resolución.
 - H3 local admite hasta 768 píxeles en el lado corto a 24 fps. La etapa separada de regeneración 2K de MiniMax solo está disponible por API y no se presenta como función local.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[Validación de carga y grafo]
     V --> J[(Registro privado de trabajos)]
     V -->|loopback :8188| C[ComfyUI fijado]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + VAE de vídeo/audio]
+    C --> G0[GPU 0: todas las etapas H3 por defecto]
+    G1[GPU 1: reservada para LocalLLM por defecto]
+    C -. H3_AUX_DEVICE opcional .-> G1
     C <--> R[RAM del host: DynamicVRAM + descarga asíncrona]
     M[Paquete de modelos verificado por SHA-256] --> C
 ```

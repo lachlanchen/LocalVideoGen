@@ -15,6 +15,8 @@ from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .media import bounded_video_dimensions
+
 
 class SeriesMediaError(RuntimeError):
     """A generated artifact failed validation or local processing."""
@@ -355,6 +357,7 @@ class SeriesMedia:
         tail = folder / f"{stem}-tail-{seconds}s.mp4"
         frame = folder / f"{stem}-final-frame.png"
         start = max(0.0, source_duration - seconds)
+        tail_width, tail_height = bounded_video_dimensions(width, height)
         await self._run(
             [
                 self.ffmpeg or "ffmpeg",
@@ -374,7 +377,7 @@ class SeriesMedia:
                 "-map",
                 "0:a:0",
                 "-vf",
-                "fps=24",
+                f"fps=24,scale={tail_width}:{tail_height}:flags=lanczos,setsar=1",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -417,8 +420,8 @@ class SeriesMedia:
         )
         tail_metadata = await self.validate_video(
             tail,
-            width=width,
-            height=height,
+            width=tail_width,
+            height=tail_height,
             expected_frames=seconds * 24,
             expected_duration=float(seconds),
         )

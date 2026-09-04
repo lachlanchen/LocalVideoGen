@@ -70,7 +70,10 @@ class MediaLimits:
     max_image_pixels: int = 40_000_000
     max_source_video_edge: int = 8192
     max_source_video_pixels: int = 40_000_000
-    normalized_video_edge: int = 2048
+    # One visual video reference at this size fits the measured 24 GiB long-R2V
+    # envelope together with a 704x1248, 345-frame output.
+    normalized_video_edge: int = 1024
+    normalized_video_pixels: int = 576 * 1024
 
     video_min_seconds: float = 2.0
     video_max_seconds: float = 15.0
@@ -104,6 +107,38 @@ class MediaLimits:
 
 
 DEFAULT_LIMITS = MediaLimits()
+
+
+def h3_effective_video_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Mirror MiniMaxH3ReferenceToVideo's effective reference-video canvas."""
+
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width < 1
+        or height < 1
+    ):
+        raise MediaValidationError("video has invalid dimensions")
+    maximum_pixels = 768 * 1344
+    ratio = width / height
+    if ratio >= 1.0:
+        nominal_width, nominal_height = 768 * ratio, 768
+    else:
+        nominal_width, nominal_height = 768, 768 / ratio
+    if nominal_width * nominal_height > maximum_pixels:
+        scale = math.sqrt(
+            maximum_pixels / (nominal_width * nominal_height)
+        )
+        nominal_width *= scale
+        nominal_height *= scale
+    canvas_width = max(32, round(nominal_width / 32) * 32)
+    canvas_height = max(32, round(nominal_height / 32) * 32)
+    if width * height < canvas_width * canvas_height:
+        canvas_width = max(32, round(width / 32) * 32)
+        canvas_height = max(32, round(height / 32) * 32)
+    return canvas_width, canvas_height
 
 
 @dataclass
@@ -360,7 +395,12 @@ async def _ffprobe(path: Path, executable: str, limits: MediaLimits) -> dict[str
         "-v",
         "error",
         "-show_entries",
-        "format=duration,size,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,duration,sample_rate,channels",
+        (
+            "format=duration,size,format_name:"
+            "stream=index,codec_type,codec_name,width,height,avg_frame_rate,"
+            "r_frame_rate,duration,sample_rate,channels:"
+            "stream_tags=rotate:stream_side_data=rotation"
+        ),
         "-of",
         "json",
         "-protocol_whitelist",
@@ -449,6 +489,32 @@ def _duration(document: Mapping[str, Any], stream: Mapping[str, Any]) -> float:
         return _number(container.get("duration"), "duration")
 
 
+def _display_rotation(stream: Mapping[str, Any]) -> int:
+    """Return a trusted right-angle display rotation from ffprobe metadata."""
+
+    raw: Any = None
+    side_data = stream.get("side_data_list")
+    if isinstance(side_data, list):
+        for item in side_data:
+            if isinstance(item, Mapping) and item.get("rotation") is not None:
+                raw = item.get("rotation")
+                break
+    tags = stream.get("tags")
+    if raw is None and isinstance(tags, Mapping):
+        raw = tags.get("rotate")
+    if raw in {None, ""}:
+        return 0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MediaValidationError("reference video has invalid display rotation") from exc
+    if not math.isfinite(value) or not math.isclose(value / 90, round(value / 90), abs_tol=1e-6):
+        raise MediaValidationError(
+            "reference video display rotation must be a multiple of 90 degrees"
+        )
+    return int(round(value)) % 360
+
+
 def validate_video_probe(
     document: Mapping[str, Any],
     *,
@@ -492,12 +558,22 @@ def validate_video_probe(
         limits.normalized_video_edge if normalized else limits.max_source_video_edge
     )
     pixel_limit = (
-        edge_limit * edge_limit if normalized else limits.max_source_video_pixels
+        limits.normalized_video_pixels
+        if normalized
+        else limits.max_source_video_pixels
     )
     if width > edge_limit or height > edge_limit or width * height > pixel_limit:
         raise MediaValidationError(
             "reference video dimensions exceed the safe decode limit"
         )
+    if normalized and (width % 32 or height % 32):
+        raise MediaValidationError(
+            "normalized reference video dimensions are not H3-aligned to 32 pixels"
+        )
+    rotation = _display_rotation(stream)
+    display_width, display_height = (
+        (height, width) if rotation in {90, 270} else (width, height)
+    )
 
     fps = _fraction(stream.get("avg_frame_rate")) or _fraction(
         stream.get("r_frame_rate")
@@ -537,6 +613,9 @@ def validate_video_probe(
         "duration": duration,
         "width": width,
         "height": height,
+        "display_width": display_width,
+        "display_height": display_height,
+        "rotation": rotation,
         "fps": fps,
         "has_audio": bool(audio_streams),
         "audio_sample_rate": audio_rate,
@@ -641,6 +720,61 @@ def _sha256(path: Path, chunk_size: int = MIB) -> str:
     return digest.hexdigest()
 
 
+def bounded_video_dimensions(
+    width: int,
+    height: int,
+    limits: MediaLimits = DEFAULT_LIMITS,
+) -> tuple[int, int]:
+    """Fit a video into the long-reference edge/pixel cap, preserving aspect."""
+
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width < 1
+        or height < 1
+    ):
+        raise MediaValidationError("video has invalid dimensions")
+    scale = min(
+        1.0,
+        limits.normalized_video_edge / max(width, height),
+        math.sqrt(limits.normalized_video_pixels / (width * height)),
+    )
+    raw_width = width * scale
+    raw_height = height * scale
+
+    def aligned_choices(value: float) -> tuple[int, ...]:
+        lower = max(32, math.floor(value / 32) * 32)
+        upper = max(32, math.ceil(value / 32) * 32)
+        return tuple(dict.fromkeys((lower, upper)))
+
+    candidates = [
+        (candidate_width, candidate_height)
+        for candidate_width in aligned_choices(raw_width)
+        for candidate_height in aligned_choices(raw_height)
+        if candidate_width <= limits.normalized_video_edge
+        and candidate_height <= limits.normalized_video_edge
+        and candidate_width * candidate_height <= limits.normalized_video_pixels
+    ]
+    if not candidates:  # pragma: no cover - the default cap always admits 32x32
+        raise MediaValidationError("normalized video pixel limit is too small")
+
+    source_ratio = width / height
+
+    def score(candidate: tuple[int, int]) -> tuple[float, float, int]:
+        candidate_width, candidate_height = candidate
+        distance = (candidate_width - raw_width) ** 2 + (
+            candidate_height - raw_height
+        ) ** 2
+        ratio_error = abs(math.log((candidate_width / candidate_height) / source_ratio))
+        # When distance and aspect are tied, retain the floor-aligned choice.
+        upward_axes = int(candidate_width > raw_width) + int(candidate_height > raw_height)
+        return ratio_error, distance, upward_axes
+
+    return min(candidates, key=score)
+
+
 async def _normalize_video(
     source: Path,
     destination: Path,
@@ -649,11 +783,14 @@ async def _normalize_video(
     source_info: Mapping[str, Any],
 ) -> None:
     duration = min(float(source_info["duration"]), limits.video_max_seconds)
+    target_width, target_height = bounded_video_dimensions(
+        int(source_info.get("display_width") or source_info["width"]),
+        int(source_info.get("display_height") or source_info["height"]),
+        limits,
+    )
     scale = (
         f"fps={limits.video_fps},"
-        f"scale=w='min({limits.normalized_video_edge},iw)':"
-        f"h='min({limits.normalized_video_edge},ih)':"
-        "force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,setsar=1"
+        f"scale={target_width}:{target_height}:flags=lanczos,setsar=1"
     )
     arguments = [
         ffmpeg,
@@ -866,6 +1003,9 @@ async def prepare_upload(
                 "source_duration": source_info["duration"],
                 "source_width": source_info["width"],
                 "source_height": source_info["height"],
+                "source_display_width": source_info["display_width"],
+                "source_display_height": source_info["display_height"],
+                "source_rotation": source_info["rotation"],
                 "source_fps": source_info["fps"],
                 "sha256": await asyncio.to_thread(_sha256, destination),
             }
@@ -922,6 +1062,8 @@ __all__ = [
     "MediaToolUnavailable",
     "MediaValidationError",
     "PreparedUpload",
+    "bounded_video_dimensions",
+    "h3_effective_video_dimensions",
     "prepare_upload",
     "validate_audio_probe",
     "validate_video_probe",

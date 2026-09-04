@@ -39,6 +39,13 @@ MAX_RECEIPT_BYTES = 64 * 1024
 SERIES_API_VERSION = 1
 SERIES_RECEIPT_SCHEMA = "localvideogen.series-receipt.v1"
 MAXIMUM_QUALITY_PROFILE = "quality_bf16_dual"
+LONG_REFERENCE_SAFE_PROFILE = "quality_int8_offload"
+LONG_REFERENCE_SAFE_WIDTH = 1248
+LONG_REFERENCE_SAFE_HEIGHT = 704
+LONG_REFERENCE_MIN_LENGTH = 243
+LONG_REFERENCE_FRAME_PIXEL_LIMIT = 510_000_000
+LONG_REFERENCE_VIDEO_MAX_EDGE = 1024
+LONG_REFERENCE_VIDEO_MAX_PIXELS = 576 * 1024
 TERMINAL_SERIES_STATUSES = frozenset({"completed", "failed", "cancelled"})
 SERIES_STATUSES = frozenset(
     {
@@ -78,6 +85,11 @@ WORLD_TRAVEL_OPENING_ONLY_IMAGE_LABELS = (
 REFERENCE_TAG_PATTERN = re.compile(
     r"<(Picture|Video|Audio)\s+([0-9]+)>", re.IGNORECASE
 )
+
+
+def _aligned_frame_count(seconds: float) -> int:
+    frames = max(5, round(seconds * 24))
+    return frames + ((5 - (frames % 17)) % 17)
 
 
 class SeriesClientError(RuntimeError):
@@ -700,7 +712,8 @@ class LocalVideoGenClient:
         config = self.config()
         if config.get("series_api_version") != SERIES_API_VERSION:
             raise SeriesClientError(
-                f"server series_api_version must be {SERIES_API_VERSION}; stopped before upload"
+                f"server series_api_version must be {SERIES_API_VERSION}; stopped before upload. "
+                "Update/restart H3 Studio from the same LocalVideoGen checkout"
             )
         profiles = config.get("profiles")
         if not isinstance(profiles, list):
@@ -713,7 +726,7 @@ class LocalVideoGenClient:
         settings = effective_spec.get("settings") or {}
         if not isinstance(settings, Mapping):
             raise SeriesClientError("settings must be a JSON object")
-        profile_id = str(settings.get("profile") or MAXIMUM_QUALITY_PROFILE)
+        profile_id = str(settings.get("profile") or LONG_REFERENCE_SAFE_PROFILE)
         selected_profile = profile_index.get(profile_id)
         if selected_profile is None:
             raise SeriesClientError(
@@ -722,6 +735,37 @@ class LocalVideoGenClient:
         series = config.get("series")
         if not isinstance(series, Mapping):
             raise SeriesClientError("server series capability contract is missing")
+        long_reference = config.get("long_reference")
+        default_settings = series.get("default_settings")
+        uploads = config.get("uploads")
+        upload_video = uploads.get("video") if isinstance(uploads, Mapping) else None
+        normalized_video = (
+            upload_video.get("normalized")
+            if isinstance(upload_video, Mapping)
+            else None
+        )
+        if (
+            not isinstance(long_reference, Mapping)
+            or long_reference.get("profile") != LONG_REFERENCE_SAFE_PROFILE
+            or long_reference.get("ref_image_size") != "match"
+            or long_reference.get("minimum_length") != LONG_REFERENCE_MIN_LENGTH
+            or long_reference.get("frame_pixel_limit")
+            != LONG_REFERENCE_FRAME_PIXEL_LIMIT
+            or not isinstance(default_settings, Mapping)
+            or default_settings.get("profile") != LONG_REFERENCE_SAFE_PROFILE
+            or default_settings.get("width") != LONG_REFERENCE_SAFE_WIDTH
+            or default_settings.get("height") != LONG_REFERENCE_SAFE_HEIGHT
+            or default_settings.get("ref_image_size") != "match"
+            or not isinstance(normalized_video, Mapping)
+            or normalized_video.get("max_edge") != LONG_REFERENCE_VIDEO_MAX_EDGE
+            or normalized_video.get("max_pixels")
+            != LONG_REFERENCE_VIDEO_MAX_PIXELS
+        ):
+            raise SeriesClientError(
+                "server does not advertise the required 24 GiB long-reference "
+                "normalization and admission contract; stopped before upload. "
+                "Update/restart H3 Studio from the same LocalVideoGen checkout"
+            )
         template = str(effective_spec.get("template") or "lalachan")
         templates = series.get("templates")
         if not isinstance(templates, list) or template not in templates:
@@ -760,9 +804,18 @@ class LocalVideoGenClient:
                 raise SeriesClientError(
                     "world_travel maximum-quality profile contract has changed"
                 )
-            if profile_id != MAXIMUM_QUALITY_PROFILE:
+            if capability.get("long_reference_safe_profile") != LONG_REFERENCE_SAFE_PROFILE:
                 raise SeriesClientError(
-                    "world_travel cross-project runs require quality_bf16_dual; refusing a silent quality downgrade"
+                    "world_travel long-reference safety profile contract has changed"
+                )
+            if profile_id not in {
+                MAXIMUM_QUALITY_PROFILE,
+                LONG_REFERENCE_SAFE_PROFILE,
+            }:
+                raise SeriesClientError(
+                    "world_travel accepts quality_int8_offload (Long reference · "
+                    "24 GiB safe), or quality_bf16_dual only for an admitted "
+                    "short visual-video job or image-only Series with continuity off"
                 )
             maximum = profile_index.get(MAXIMUM_QUALITY_PROFILE)
             if not isinstance(maximum, Mapping) or any(
@@ -775,6 +828,18 @@ class LocalVideoGenClient:
             ):
                 raise SeriesClientError(
                     "quality_bf16_dual must be BF16, stage-placement-capable, non-Turbo, and 25-step R2V"
+                )
+            safe = profile_index.get(LONG_REFERENCE_SAFE_PROFILE)
+            if not isinstance(safe, Mapping) or any(
+                (
+                    safe.get("precision") != "int8",
+                    safe.get("dual_gpu") is not False,
+                    safe.get("turbo") is not False,
+                    safe.get("steps_ref") != 25,
+                )
+            ):
+                raise SeriesClientError(
+                    "quality_int8_offload must be INT8, one-GPU, non-Turbo, and 25-step R2V"
                 )
             picture_slots = capability.get("picture_slots")
             if not isinstance(picture_slots, Mapping):
@@ -837,6 +902,104 @@ class LocalVideoGenClient:
             )
         else:
             effective_picture_layouts = []
+
+        try:
+            width = int(settings.get("width", default_settings["width"]))
+            height = int(settings.get("height", default_settings["height"]))
+            continuity_seconds = int(
+                settings.get(
+                    "continuity_seconds",
+                    2 if template == "world_travel" else 3,
+                )
+            )
+        except (TypeError, ValueError, OverflowError, KeyError) as exc:
+            raise SeriesClientError("series safety settings are invalid") from exc
+        ref_image_size = str(
+            settings.get("ref_image_size") or default_settings["ref_image_size"]
+        )
+        references = effective_spec.get("references") or {}
+        if not isinstance(references, Mapping):
+            raise SeriesClientError("references must be a JSON object")
+        shared_images = references.get("images") or []
+        shared_videos = references.get("videos") or []
+        shared_audio = references.get("audio") or []
+        shots = effective_spec.get("shots") or []
+        if any(
+            not isinstance(items, list)
+            for items in (shared_images, shared_videos, shared_audio, shots)
+        ):
+            raise SeriesClientError("series reference or shot lists are invalid")
+        explicit_video_audio = sum(
+            bool(
+                item.get("soundtrack")
+                or item.get("soundtrack_source")
+                or item.get("soundtrack_path")
+                or item.get("has_audio")
+            )
+            for item in shared_videos
+            if isinstance(item, Mapping)
+        )
+        video_pixels = len(shared_videos) * LONG_REFERENCE_VIDEO_MAX_PIXELS
+        for index, shot in enumerate(shots):
+            if not isinstance(shot, Mapping):
+                raise SeriesClientError("each shot must be a JSON object")
+            try:
+                length = _aligned_frame_count(float(shot.get("duration", 10)))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise SeriesClientError(f"Shot {index + 1} duration is invalid") from exc
+            has_continuity = index > 0 and continuity_seconds > 0
+            effective_video_pixels = video_pixels + (
+                LONG_REFERENCE_VIDEO_MAX_PIXELS if has_continuity else 0
+            )
+            if not effective_video_pixels:
+                continue
+            if length >= LONG_REFERENCE_MIN_LENGTH and profile_id != LONG_REFERENCE_SAFE_PROFILE:
+                raise SeriesClientError(
+                    f"Shot {index + 1} has a long visual-video reference and requires "
+                    f"{LONG_REFERENCE_SAFE_PROFILE} before upload; set "
+                    "settings.profile='quality_int8_offload' (Long reference · 24 GiB safe)"
+                )
+            if length >= LONG_REFERENCE_MIN_LENGTH and ref_image_size != "match":
+                raise SeriesClientError(
+                    f"Shot {index + 1} has a long visual-video reference and requires "
+                    "ref_image_size='match' before upload; set "
+                    "settings.ref_image_size='match' (Reference fidelity: Match canvas)"
+                )
+            omitted = set(shot.get("omit_shared_image_labels") or [])
+            image_count = sum(
+                isinstance(item, Mapping) and item.get("label") not in omitted
+                for item in shared_images
+            )
+            if isinstance(shot.get("scene_reference"), Mapping):
+                image_count += 1
+            if has_continuity:
+                image_count += 1
+            additional_still_pixels = (
+                max(0, image_count - 1) * width * height
+                if ref_image_size == "match"
+                else 0
+            )
+            combined = (
+                length * (width * height + effective_video_pixels)
+                + additional_still_pixels
+            )
+            if combined > LONG_REFERENCE_FRAME_PIXEL_LIMIT:
+                raise SeriesClientError(
+                    f"Shot {index + 1} is {combined:,} combined frame-pixels, above "
+                    f"the 24 GiB limit of {LONG_REFERENCE_FRAME_PIXEL_LIMIT:,}; "
+                    "stopped before upload. Reduce that shot's duration, settings "
+                    "width/height, or the visual video/picture reference count"
+                )
+            audio_count = len(shared_audio) + explicit_video_audio
+            if has_continuity and audio_count == 0:
+                audio_count = 1
+            if length >= LONG_REFERENCE_MIN_LENGTH and audio_count > 1:
+                raise SeriesClientError(
+                    f"Shot {index + 1} has more than one long-job audio conditioning "
+                    "source; stopped before upload. Keep one standalone audio or "
+                    "video soundtrack; continuity audio is automatically visual-only "
+                    "when another audio source is present"
+                )
 
         needs_runtime = (
             self._spec_uses_local_sources(effective_spec)
@@ -999,10 +1162,10 @@ class LocalVideoGenClient:
         settings = payload.setdefault("settings", {})
         if not isinstance(settings, dict):
             raise SeriesClientError("settings must be a JSON object")
-        settings.setdefault("profile", "quality_bf16_dual")
-        settings.setdefault("width", 1024)
-        settings.setdefault("height", 768)
-        settings.setdefault("ref_image_size", "max")
+        settings.setdefault("profile", LONG_REFERENCE_SAFE_PROFILE)
+        settings.setdefault("width", LONG_REFERENCE_SAFE_WIDTH)
+        settings.setdefault("height", LONG_REFERENCE_SAFE_HEIGHT)
+        settings.setdefault("ref_image_size", "match")
         settings.setdefault(
             "continuity_seconds",
             2 if payload.get("template") == "world_travel" else 3,

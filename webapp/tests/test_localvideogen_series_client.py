@@ -61,9 +61,31 @@ def maximum_quality_config() -> dict:
                 "turbo": False,
                 "steps_ref": 25,
             },
+            {
+                "id": "quality_int8_offload",
+                "precision": "int8",
+                "dual_gpu": False,
+                "turbo": False,
+                "steps_ref": 25,
+            },
         ],
+        "long_reference": {
+            "profile": "quality_int8_offload",
+            "ref_image_size": "match",
+            "minimum_length": 243,
+            "frame_pixel_limit": 510_000_000,
+        },
+        "uploads": {
+            "video": {"normalized": {"max_edge": 1024, "max_pixels": 576 * 1024}}
+        },
         "series": {
             "templates": ["lalachan", "movie", "world_travel"],
+            "default_settings": {
+                "profile": "quality_int8_offload",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "match",
+            },
             "shot_reference_policy": {
                 "field": "omit_shared_image_labels",
                 "logical_picture_tags_remapped": True,
@@ -74,6 +96,7 @@ def maximum_quality_config() -> dict:
                     "template": "world_travel",
                     "render_mode": "r2v",
                     "maximum_quality_profile": "quality_bf16_dual",
+                    "long_reference_safe_profile": "quality_int8_offload",
                     "picture_slots": {
                         "shared": [
                             {"slot": index, "label": label}
@@ -101,7 +124,7 @@ def maximum_quality_config() -> dict:
     }
 
 
-def token_world_travel_spec(*, profile: str = "quality_bf16_dual") -> dict:
+def token_world_travel_spec(*, profile: str = "quality_int8_offload") -> dict:
     return {
         "title": "Italy",
         "template": "world_travel",
@@ -323,12 +346,18 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
 
     def test_preflight_enforces_v1_maximum_world_travel_contract(self) -> None:
         client = PreparationClient()
-        report = client.preflight_series_spec(token_world_travel_spec())
+        report = client.preflight_series_spec(
+            token_world_travel_spec(profile="quality_bf16_dual")
+        )
         self.assertEqual(report["series_api_version"], 1)
         self.assertEqual(report["profile"], "quality_bf16_dual")
         self.assertIsNone(report["runtime"])
         self.assertEqual(client.config_checks, 1)
         self.assertEqual(client.deep_health_checks, 0)
+        safe_report = client.preflight_series_spec(
+            token_world_travel_spec(profile="quality_int8_offload")
+        )
+        self.assertEqual(safe_report["profile"], "quality_int8_offload")
 
         cases = (
             ("version", lambda config: config.update(series_api_version=2), "version"),
@@ -374,7 +403,7 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
                     rejected.preflight_series_spec(token_world_travel_spec())
                 self.assertEqual(rejected.uploaded, [])
 
-        with self.assertRaisesRegex(SeriesClientError, "silent quality downgrade"):
+        with self.assertRaisesRegex(SeriesClientError, "accepts quality_int8_offload"):
             client.preflight_series_spec(
                 token_world_travel_spec(profile="quality_int8_dual")
             )
@@ -382,6 +411,74 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
             client.preflight_series_spec(
                 token_world_travel_spec(profile="missing-profile")
             )
+
+    def test_every_template_requires_the_long_reference_server_contract(self) -> None:
+        spec = {
+            "title": "Movie",
+            "template": "movie",
+            "references": {"images": [], "videos": [], "audio": []},
+            "shots": [
+                {"title": "One", "prompt": "One.", "duration": 5},
+                {"title": "Two", "prompt": "Two.", "duration": 5},
+            ],
+        }
+        for field in ("long_reference", "uploads"):
+            with self.subTest(field=field):
+                client = PreparationClient()
+                client.config_result.pop(field)
+                with self.assertRaisesRegex(SeriesClientError, "stopped before upload"):
+                    client.preflight_series_spec(spec)
+                self.assertEqual(client.uploaded, [])
+        client = PreparationClient()
+        client.config_result["series"].pop("default_settings")
+        with self.assertRaisesRegex(SeriesClientError, "stopped before upload"):
+            client.preflight_series_spec(spec)
+
+    def test_long_bf16_continuity_is_rejected_before_upload(self) -> None:
+        spec = {
+            "title": "Unsafe continuity",
+            "template": "movie",
+            "settings": {
+                "profile": "quality_bf16_dual",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "max",
+                "continuity_seconds": 3,
+            },
+            "references": {"images": [], "videos": [], "audio": []},
+            "shots": [
+                {"title": "One", "prompt": "One.", "duration": 10},
+                {"title": "Two", "prompt": "Two.", "duration": 10},
+            ],
+        }
+        client = PreparationClient()
+        with self.assertRaisesRegex(SeriesClientError, "quality_int8_offload"):
+            client.preflight_series_spec(spec)
+        self.assertEqual(client.uploaded, [])
+
+    def test_checked_world_travel_example_passes_client_safety_preflight(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[2]
+            / "examples"
+            / "series-api"
+            / "maximum-quality-world-travel.json"
+        )
+        spec = json.loads(source.read_text(encoding="utf-8"))
+        for kind in ("images", "videos", "audio"):
+            for index, item in enumerate(spec["references"][kind], start=1):
+                item.pop("source", None)
+                item["token"] = f"{kind}-{index}"
+        for index, shot in enumerate(spec["shots"], start=1):
+            shot["scene_reference"].pop("source", None)
+            shot["scene_reference"]["token"] = f"scene-{index}"
+
+        client = PreparationClient()
+        report = client.preflight_series_spec(spec)
+
+        self.assertEqual(report["profile"], "quality_int8_offload")
+        self.assertEqual(len(report["effective_picture_layouts"]), 6)
+        self.assertIsNone(report["runtime"])
+        self.assertEqual(client.uploaded, [])
 
     def test_local_source_and_start_require_deep_ready_health(self) -> None:
         client = PreparationClient()
@@ -462,11 +559,11 @@ class LocalVideoGenSeriesClientTests(unittest.TestCase):
             payload = client.prepare_series_payload(spec, base_dir=root)
 
             self.assertEqual(spec, original)
-            self.assertEqual(payload["settings"]["profile"], "quality_bf16_dual")
-            self.assertEqual(payload["settings"]["ref_image_size"], "max")
+            self.assertEqual(payload["settings"]["profile"], "quality_int8_offload")
+            self.assertEqual(payload["settings"]["ref_image_size"], "match")
             self.assertEqual(payload["settings"]["continuity_seconds"], 2)
-            self.assertEqual(payload["settings"]["width"], 1024)
-            self.assertEqual(payload["settings"]["height"], 768)
+            self.assertEqual(payload["settings"]["width"], 1248)
+            self.assertEqual(payload["settings"]["height"], 704)
             self.assertEqual(client.config_checks, 1)
             self.assertEqual(client.deep_health_checks, 1)
             self.assertEqual(len(client.uploaded), 9)

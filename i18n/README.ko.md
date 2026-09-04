@@ -14,6 +14,8 @@
 
 LocalVideoGen은 버전이 고정된 외부 ComfyUI 설치와 공식 정렬 MiniMax H3 모델 패키지를 감싸는 재현 가능한 운영 계층입니다. 루프백 전용 H3 Studio 웹앱, 체크섬을 통과한 모델 다운로드, T2V/I2V/R2V 워크플로 프리셋, 네이티브 영상·음성 공동 생성, 영구 작업 기록, 그리고 24 GiB RTX 4090 두 장과 128 GiB 호스트 RAM에 맞춘 보수적 수명주기 제어를 제공합니다.
 
+긴 시각 참조에는 **Long reference · 24 GiB safe** 프리셋을 사용하세요: `quality_int8_offload`, `match`, 세로 704×1248 또는 가로 1248×704입니다. 제출 전 가드가 크기와 참조 부하를 검사하고 안전 한도를 넘는 작업을 GPU로 보내기 전에 거부합니다.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ H3 Studio를 벗어나지 않고 **Single Clip**과 **Series**를 전환할 수 
 
 ## 제공 기능
 
-- 최고 품질 프리셋: pruned BF16 Ref2VA/FL2VA DiT, 정렬된 NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE, 전체 모델 25단계.
-- 듀얼 GPU 단계 배치: GPU 0은 DiT와 denoiser를, GPU 1은 Qwen conditioning과 video/audio VAE 단계를 실행합니다. PCIe peer-to-peer 경로를 전제로 하지 않습니다.
+- BF16 최고 충실도는 짧은 시각 비디오 참조 또는 이미지만 쓰는 R2V용입니다. 긴 비디오 참조는 측정된 24 GiB 안전 INT8/offload 경로를 기본으로 사용합니다.
+- 공유 워크스테이션에서는 GPU 0이 기본적으로 모든 H3 단계를 실행하고 GPU 1은 LocalLLM용으로 비워 둡니다. 명시적인 `H3_AUX_DEVICE=gpu:1`만 Qwen과 참조 VAE를 GPU 1로 옮깁니다.
 - max-identity 참조 프리셋과 네이티브 동기화 음성을 포함한 로컬 T2V, I2V, 다중 참조 R2V.
 - 품질, 단일 GPU 대체, 저해상도 INT8 Turbo 미리보기 프로필.
 - 로컬 H3 출력은 24 fps에서 짧은 변 최대 768 px입니다. MiniMax의 별도 2K 재생성 단계는 API 전용이며 로컬 기능으로 제시하지 않습니다.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[업로드 및 그래프 검증]
     V --> J[(비공개 작업 레지스트리)]
     V -->|루프백 :8188| C[고정 버전 ComfyUI]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + video/audio VAE]
+    C --> G0[GPU 0: 기본적으로 모든 H3 단계]
+    G1[GPU 1: 기본적으로 LocalLLM용 예약]
+    C -. 선택적 H3_AUX_DEVICE .-> G1
     C <--> R[호스트 RAM: DynamicVRAM + 비동기 오프로딩]
     M[SHA-256 검증 모델 번들] --> C
 ```

@@ -220,7 +220,7 @@
                     <option value="match">Match video size · faster</option>
                     <option value="max">Maximum identity · heavier</option>
                   </select>
-                  <p class="field-hint">Maximum keeps more facial and object detail.</p>
+                  <p class="field-hint">Match is the 24 GiB-safe default for long video references. Maximum is an explicit short/image-only quality choice.</p>
                 </div>
               </div>
             </details>
@@ -364,7 +364,7 @@
             <div class="series-settings-row">
               <label><span>Canvas</span><select id="seriesResolution" name="seriesResolution"></select></label>
               <label><span>Continuity handoff</span><select id="seriesContinuity" name="seriesContinuity"><option value="3">Last 3 seconds</option><option value="2">Last 2 seconds · travel default</option><option value="4">Last 4 seconds</option><option value="0">Off</option></select></label>
-              <label><span>Reference fidelity</span><select id="seriesRefImageSize" name="seriesRefImageSize"><option value="max">Maximum identity</option><option value="match">Match canvas · faster</option></select></label>
+              <label><span>Reference fidelity</span><select id="seriesRefImageSize" name="seriesRefImageSize"><option value="match">Match canvas · long-reference safe</option><option value="max">Maximum identity · short video / continuity off</option></select></label>
             </div>
             <div class="form-status" id="seriesFormStatus" role="status" aria-live="polite"></div>
             <button class="primary-button series-start-button" id="startSeries" type="submit" disabled>

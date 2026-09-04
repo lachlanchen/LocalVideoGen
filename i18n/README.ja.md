@@ -14,6 +14,8 @@
 
 LocalVideoGen は、バージョン固定された外部 ComfyUI 環境と公式のアライン済み MiniMax H3 モデルパッケージを扱う再現可能な運用レイヤーです。ループバック限定の H3 Studio ウェブアプリ、チェックサムを通過したモデル取得、T2V/I2V/R2V ワークフロー、映像・音声のネイティブ同時生成、永続ジョブ履歴、そして 24 GiB RTX 4090 2基とホスト RAM 128 GiB 向けの保守的なライフサイクル制御を備えます。
 
+長い映像参照には **Long reference · 24 GiB safe** を使用してください。設定は `quality_int8_offload`、`match`、縦 704×1248 または横 1248×704 です。送信前ガードが寸法と参照負荷を検査し、安全限界を超えるジョブを GPU へ送る前に拒否します。
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ H3 Studio を離れずに **Single Clip** と **Series** を切り替えられ�
 
 ## 提供する機能
 
-- 最高品質プリセット：pruned BF16 Ref2VA/FL2VA DiT、アライン済み NVFP4-AWQ Qwen3-VL conditioner、FP16 video VAE、FP32 audio VAE、フルモデル 25 ステップ。
-- デュアル GPU のステージ配置：GPU 0 が DiT と denoiser、GPU 1 が Qwen conditioning と video/audio VAE を担当します。PCIe peer-to-peer 経路は前提にしません。
+- BF16 の最高忠実度は短い映像参照または画像のみの R2V 向けです。長い映像参照には、実測済みの 24 GiB 安全な INT8/offload 経路が既定で使われます。
+- 共有ワークステーションでは、既定で GPU 0 が全 H3 ステージを実行し、GPU 1 は LocalLLM 用に空けます。明示的な `H3_AUX_DEVICE=gpu:1` のみが Qwen と参照 VAE を GPU 1 へ移します。
 - ローカル T2V、I2V、複数参照 R2V。max-identity 参照プリセットとネイティブ同期音声を含みます。
 - 品質重視、単一 GPU フォールバック、低解像度 INT8 Turbo プレビューの各プロファイル。
 - ローカル H3 は 24 fps、短辺最大 768 px。MiniMax の別工程である 2K 再生成は API 限定であり、ローカル機能として扱いません。
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[アップロードとグラフ検証]
     V --> J[(非公開ジョブ台帳)]
     V -->|ループバック :8188| C[固定版 ComfyUI]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + video/audio VAE]
+    C --> G0[GPU 0: 既定ですべての H3 ステージ]
+    G1[GPU 1: 既定で LocalLLM 用に予約]
+    C -. 任意の H3_AUX_DEVICE .-> G1
     C <--> R[ホスト RAM: DynamicVRAM + 非同期オフロード]
     M[SHA-256 検証済みモデル一式] --> C
 ```

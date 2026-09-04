@@ -15,6 +15,12 @@ from typing import Any
 
 from .comfy_client import ComfyClient, ComfyError, flatten_outputs
 from .job_store import ACTIVE_STATUSES, JobStore
+from .media import (
+    MediaValidationError,
+    bounded_video_dimensions,
+    prepare_upload,
+    validate_video_probe,
+)
 from .series_media import SeriesMedia, SeriesMediaError
 from .series_store import (
     SeriesNotFoundError,
@@ -22,6 +28,12 @@ from .series_store import (
     SeriesStoreValidationError,
 )
 from .workflows import (
+    LONG_REFERENCE_LANDSCAPE,
+    LONG_REFERENCE_MIN_SECONDS,
+    LONG_REFERENCE_SAFE_PROFILE,
+    LONG_REFERENCE_SAFE_REF_IMAGE_SIZE,
+    LONG_REFERENCE_VIDEO_MAX_EDGE,
+    LONG_REFERENCE_VIDEO_MAX_PIXELS,
     PROFILES,
     RequestError,
     UploadedAsset,
@@ -30,6 +42,7 @@ from .workflows import (
     compile_prompt,
     parse_render_spec,
     profile_requires_two_devices,
+    validate_video_reference_admission,
 )
 
 
@@ -141,6 +154,11 @@ def _trusted_asset(asset: UploadedAsset, *, label: Any) -> dict[str, Any]:
         record["has_audio"] = bool(
             isinstance(asset.metadata, Mapping) and asset.metadata.get("has_audio")
         )
+        if isinstance(asset.metadata, Mapping):
+            for field in ("width", "height"):
+                value = asset.metadata.get(field)
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    record[field] = value
     if isinstance(asset.metadata, Mapping):
         digest = str(asset.metadata.get("sha256") or "").lower()
         if SHA256_PATTERN.fullmatch(digest):
@@ -150,7 +168,7 @@ def _trusted_asset(asset: UploadedAsset, *, label: Any) -> dict[str, Any]:
 
 def _continuity_for_successor(
     document: Mapping[str, Any], shot_index: int
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     """Validate a recovered P9/final-tail pair before it enters a prompt graph."""
 
     settings = document.get("settings")
@@ -200,6 +218,10 @@ def _continuity_for_successor(
         validated[f"{kind}_path"] = str(path)
         validated[f"{kind}_name"] = name_value.strip()
         validated[f"{kind}_sha256"] = digest
+    for field in ("video_width", "video_height"):
+        value = continuity.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            validated[field] = value
     return validated
 
 
@@ -249,6 +271,226 @@ def _selected_shared_images(
     return [
         item for item in references["images"] if str(item["label"]) not in omitted
     ]
+
+
+def _series_shot_length(shot: Mapping[str, Any], index: int) -> int:
+    try:
+        return aligned_frame_count(float(shot.get("duration", 0)))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RequestError(f"Shot {index + 1} duration is invalid") from exc
+
+
+def _continuity_uses_embedded_audio(length: int, other_audio_count: int) -> bool:
+    """Retain legacy short-shot audio ordinals; cap only the long-safe route."""
+
+    return (
+        length < aligned_frame_count(LONG_REFERENCE_MIN_SECONDS)
+        or other_audio_count == 0
+    )
+
+
+def validate_series_reference_policy(document: Mapping[str, Any]) -> None:
+    """Cheap long-reference policy check that never probes or uploads media."""
+
+    settings = document.get("settings")
+    references = document.get("references")
+    shots = document.get("shots")
+    if (
+        not isinstance(settings, Mapping)
+        or not isinstance(references, Mapping)
+        or isinstance(shots, (str, bytes))
+        or not isinstance(shots, Sequence)
+    ):
+        raise RequestError("series document is incomplete")
+    profile_id = str(settings.get("profile") or "")
+    if profile_id not in PROFILES:
+        raise RequestError("unknown quality profile")
+    ref_image_size = str(settings.get("ref_image_size") or "")
+    continuity_seconds = _plain_int(
+        settings.get("continuity_seconds", 0), "continuity_seconds"
+    )
+    shared_videos = references.get("videos") or []
+    shared_audio = references.get("audio") or []
+    if any(
+        isinstance(items, (str, bytes)) or not isinstance(items, Sequence)
+        for items in (shared_videos, shared_audio)
+    ):
+        raise RequestError("series references are incomplete")
+    shared_audio_count = len(shared_audio) + sum(
+        bool(item.get("has_audio")) or isinstance(item.get("soundtrack"), Mapping)
+        for item in shared_videos
+        if isinstance(item, Mapping)
+    )
+    minimum_length = aligned_frame_count(LONG_REFERENCE_MIN_SECONDS)
+    for index, shot in enumerate(shots):
+        if not isinstance(shot, Mapping):
+            raise RequestError("series shot is incomplete")
+        length = _series_shot_length(shot, index)
+        has_continuity = index > 0 and continuity_seconds > 0
+        has_visual_video = bool(shared_videos) or has_continuity
+        if not has_visual_video or length < minimum_length:
+            continue
+        if profile_id != LONG_REFERENCE_SAFE_PROFILE:
+            raise RequestError(
+                f"Shot {index + 1} has a long visual-video reference and requires "
+                f"the {LONG_REFERENCE_SAFE_PROFILE} profile"
+            )
+        if ref_image_size != LONG_REFERENCE_SAFE_REF_IMAGE_SIZE:
+            raise RequestError(
+                f"Shot {index + 1} has a long visual-video reference and requires "
+                f"ref_image_size={LONG_REFERENCE_SAFE_REF_IMAGE_SIZE}"
+            )
+        audio_count = shared_audio_count
+        if has_continuity and _continuity_uses_embedded_audio(length, audio_count):
+            audio_count += 1
+        if audio_count > 1:
+            raise RequestError(
+                f"Shot {index + 1} has more than one long-job audio conditioning "
+                "source; keep one standalone audio or video soundtrack"
+            )
+
+
+def validate_series_video_admission(document: Mapping[str, Any]) -> None:
+    """Preflight every current or planned visual-video shot before Shot 1."""
+
+    validate_series_reference_policy(document)
+    settings = document.get("settings")
+    references = document.get("references")
+    shots = document.get("shots")
+    if (
+        not isinstance(settings, Mapping)
+        or not isinstance(references, Mapping)
+        or isinstance(shots, (str, bytes))
+        or not isinstance(shots, Sequence)
+    ):
+        raise RequestError("series document is incomplete")
+    profile_id = str(settings.get("profile") or "")
+    profile = PROFILES.get(profile_id)
+    if profile is None:
+        raise RequestError("unknown quality profile")
+    width = _plain_int(settings.get("width"), "width")
+    height = _plain_int(settings.get("height"), "height")
+    ref_image_size = str(settings.get("ref_image_size") or "")
+    continuity_seconds = _plain_int(
+        settings.get("continuity_seconds", 0), "continuity_seconds"
+    )
+    shared_images = references.get("images") or []
+    shared_videos = references.get("videos") or []
+    shared_audio = references.get("audio") or []
+    if any(
+        isinstance(items, (str, bytes)) or not isinstance(items, Sequence)
+        for items in (shared_images, shared_videos, shared_audio)
+    ):
+        raise RequestError("series references are incomplete")
+
+    planned_tail_width, planned_tail_height = bounded_video_dimensions(width, height)
+    for index, shot in enumerate(shots):
+        if not isinstance(shot, Mapping):
+            raise RequestError("series shot is incomplete")
+        selected_images = _selected_shared_images(
+            references, shot.get("omit_shared_image_labels") or []
+        )
+        image_count = len(selected_images)
+        if isinstance(shot.get("scene_reference"), Mapping):
+            image_count += 1
+
+        visual_videos = [
+            UploadedAsset(
+                "video",
+                str(item.get("path") or ""),
+                str(item.get("name") or ""),
+                {
+                    "width": item.get("width"),
+                    "height": item.get("height"),
+                    "has_audio": bool(item.get("has_audio")),
+                },
+            )
+            for item in shared_videos
+            if isinstance(item, Mapping)
+        ]
+        if index > 0 and continuity_seconds:
+            image_count += 1
+            prior = shots[index - 1]
+            continuity = (
+                prior.get("continuity_input") if isinstance(prior, Mapping) else None
+            )
+            if isinstance(continuity, Mapping):
+                tail_width = continuity.get("video_width")
+                tail_height = continuity.get("video_height")
+            else:
+                tail_width, tail_height = planned_tail_width, planned_tail_height
+            visual_videos.append(
+                UploadedAsset(
+                    "video",
+                    "series/continuity-tail.mp4",
+                    "continuity-tail.mp4",
+                    {"width": tail_width, "height": tail_height},
+                )
+            )
+
+        shared_video_audio_count = sum(
+            bool(item.get("has_audio")) or isinstance(item.get("soundtrack"), Mapping)
+            for item in shared_videos
+            if isinstance(item, Mapping)
+        )
+        length = _series_shot_length(shot, index)
+        audio_count = shared_video_audio_count + len(shared_audio)
+        if (
+            index > 0
+            and continuity_seconds
+            and _continuity_uses_embedded_audio(length, audio_count)
+        ):
+            audio_count += 1
+        validate_video_reference_admission(
+            mode="r2v",
+            profile=profile,
+            ref_image_size=ref_image_size,
+            width=width,
+            height=height,
+            length=length,
+            ref_images=tuple(
+                UploadedAsset("image", f"series/image-{slot}.png")
+                for slot in range(image_count)
+            ),
+            ref_videos=visual_videos,
+            audio_conditioning_count=audio_count,
+        )
+
+
+def _validate_persisted_series_admission(
+    document: Mapping[str, Any], status: str
+) -> None:
+    try:
+        validate_series_video_admission(document)
+    except RequestError as exc:
+        next_step = (
+            "Edit this ready series to the Long reference · 24 GiB safe "
+            "profile with Match output size"
+            if status == "ready"
+            else "Create a safe-profile clone for the remaining shots from the "
+            "original source spec"
+        )
+        raise RequestError(
+            f"{exc}. Existing attempts and artifacts remain preserved. {next_step}."
+        ) from exc
+
+
+def _validate_persisted_series_policy(
+    document: Mapping[str, Any], status: str
+) -> None:
+    try:
+        validate_series_reference_policy(document)
+    except RequestError as exc:
+        next_step = (
+            "Edit this ready series to the Long reference · 24 GiB safe "
+            "profile with Match output size"
+            if status == "ready"
+            else "Create a safe-profile clone for the remaining shots from the "
+            "original source spec"
+        )
+        raise RequestError(
+            f"{exc}. Existing attempts and artifacts remain preserved. {next_step}."
+        ) from exc
 
 
 def _picture_reference_layout(
@@ -321,6 +563,7 @@ def _series_reference_labels(
     scene_reference: Mapping[str, Any] | None = None,
     continuity_seconds: int,
     include_continuity: bool,
+    shot_length: int,
 ) -> list[str]:
     labels, _ = _picture_reference_layout(
         references,
@@ -338,11 +581,20 @@ def _series_reference_labels(
         else:
             audio_label = None
         video_labels.append((str(item["label"]), audio_label))
+    existing_audio_count = sum(
+        audio_label is not None for _, audio_label in video_labels
+    ) + len(references["audio"])
     if include_continuity and continuity_seconds:
         video_labels.append(
             (
                 f"previous shot's final {continuity_seconds} seconds",
-                "stereo audio from the previous shot continuity tail",
+                (
+                    "stereo audio from the previous shot continuity tail"
+                    if _continuity_uses_embedded_audio(
+                        shot_length, existing_audio_count
+                    )
+                    else None
+                ),
             )
         )
     audio_index = 1
@@ -554,12 +806,14 @@ def build_series_document(
     settings_raw = payload.get("settings") or {}
     if not isinstance(settings_raw, Mapping):
         raise RequestError("settings must be a JSON object")
-    profile = str(settings_raw.get("profile") or "quality_bf16_dual")
+    profile = str(settings_raw.get("profile") or LONG_REFERENCE_SAFE_PROFILE)
     if profile not in PROFILES:
         raise RequestError("unknown quality profile")
-    width = _plain_int(settings_raw.get("width", 1024), "width")
-    height = _plain_int(settings_raw.get("height", 768), "height")
-    ref_image_size = str(settings_raw.get("ref_image_size") or "max")
+    width = _plain_int(settings_raw.get("width", LONG_REFERENCE_LANDSCAPE[0]), "width")
+    height = _plain_int(settings_raw.get("height", LONG_REFERENCE_LANDSCAPE[1]), "height")
+    ref_image_size = str(
+        settings_raw.get("ref_image_size") or LONG_REFERENCE_SAFE_REF_IMAGE_SIZE
+    )
     if ref_image_size not in {"match", "max"}:
         raise RequestError("ref_image_size must be match or max")
     default_continuity_seconds = 2 if template == "world_travel" else 3
@@ -736,6 +990,7 @@ def build_series_document(
             scene_reference=shots[index].get("scene_reference"),
             continuity_seconds=continuity_seconds,
             include_continuity=index > 0,
+            shot_length=_series_shot_length(shots[index], index),
         )
         _, picture_tag_map = _picture_reference_layout(
             references,
@@ -779,6 +1034,7 @@ def build_series_document(
             raise RequestError(
                 f"composed prompt for Shot {index + 1} exceeds 12,000 characters"
             )
+    validate_series_video_admission(document)
     return document
 
 
@@ -1250,6 +1506,9 @@ class SeriesRunner:
 
             self.store.mutate(series_id, paused)
             return True
+        record = await self.preflight_series(series_id)
+        document = record["document"]
+        status = str(record["status"])
         next_index = next(
             (index for index, shot in enumerate(document["shots"]) if shot["status"] == "pending"),
             None,
@@ -1290,7 +1549,17 @@ class SeriesRunner:
                 )
             )
         videos = [
-            UploadedAsset("video", item["path"], item["name"]) for item in refs["videos"]
+            UploadedAsset(
+                "video",
+                item["path"],
+                item["name"],
+                {
+                    "width": item.get("width"),
+                    "height": item.get("height"),
+                    "has_audio": bool(item.get("has_audio")),
+                },
+            )
+            for item in refs["videos"]
         ]
         video_audio = [
             UploadedAsset("audio", item["soundtrack"]["path"], item["soundtrack"]["name"])
@@ -1303,6 +1572,17 @@ class SeriesRunner:
         ]
         continuity = _continuity_for_successor(document, shot_index)
         if continuity is not None:
+            other_audio_count = len(audio) + sum(
+                override is not None
+                or bool(
+                    isinstance(video.metadata, Mapping)
+                    and video.metadata.get("has_audio")
+                )
+                for video, override in zip(videos, video_audio)
+            )
+            continuity_has_audio = _continuity_uses_embedded_audio(
+                _series_shot_length(shot, shot_index), other_audio_count
+            )
             images.append(
                 UploadedAsset(
                     "image", continuity["image_path"], continuity["image_name"]
@@ -1310,7 +1590,14 @@ class SeriesRunner:
             )
             videos.append(
                 UploadedAsset(
-                    "video", continuity["video_path"], continuity["video_name"]
+                    "video",
+                    continuity["video_path"],
+                    continuity["video_name"],
+                    {
+                        "width": continuity.get("video_width"),
+                        "height": continuity.get("video_height"),
+                        "has_audio": continuity_has_audio,
+                    },
                 )
             )
             video_audio.append(None)
@@ -1320,6 +1607,7 @@ class SeriesRunner:
             scene_reference=(scene_reference if isinstance(scene_reference, Mapping) else None),
             continuity_seconds=int(document["settings"]["continuity_seconds"]),
             include_continuity=continuity is not None,
+            shot_length=_series_shot_length(shot, shot_index),
         )
         assets = {
             "first_frame": None,
@@ -1393,6 +1681,226 @@ class SeriesRunner:
             while chunk := handle.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    async def _recover_legacy_reference_video(
+        self,
+        *,
+        series_id: str,
+        relative_path: Any,
+        expected_sha256: Any,
+        original_name: Any,
+        label: str,
+        internal_continuity: bool,
+    ) -> dict[str, Any]:
+        """Backfill or safely normalize an owned, hash-matching legacy video."""
+
+        recovery = (
+            "the preserved legacy continuity tail could not be safely verified; "
+            "restore its original hash-matching local artifact before GPU submission can continue"
+            if internal_continuity
+            else f"reference '{label}' cannot be safely verified; upload it again"
+        )
+        digest = str(expected_sha256 or "").lower()
+        if self.input_root is None or not SHA256_PATTERN.fullmatch(digest):
+            raise SeriesMediaError(recovery)
+        path_value = str(relative_path or "")
+        relative = PurePosixPath(path_value)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or "\\" in path_value
+        ):
+            raise SeriesMediaError(recovery)
+        candidate = self.input_root.joinpath(*relative.parts)
+        try:
+            if candidate.is_symlink():
+                raise OSError("symbolic reference")
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(self.input_root)
+            if not resolved.is_file():
+                raise OSError("not a regular file")
+            actual = await asyncio.to_thread(self._sha256, resolved)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SeriesMediaError(recovery) from exc
+        if actual != digest:
+            raise SeriesMediaError(recovery)
+        try:
+            metadata = validate_video_probe(await self.media.probe(resolved), normalized=True)
+            if metadata.get("rotation") != 0:
+                raise MediaValidationError(
+                    "legacy normalized video retains display rotation"
+                )
+        except MediaValidationError:
+            prepared = None
+            try:
+                prepared = await prepare_upload(
+                    resolved,
+                    kind="video",
+                    original_name=str(original_name or "legacy-reference.mp4"),
+                    ffmpeg=getattr(self.media, "ffmpeg", None),
+                    ffprobe=getattr(self.media, "ffprobe", None),
+                )
+                if self.submission_check is not None:
+                    # Recovery writes into ComfyUI's private input tree. Verify
+                    # project identity/runtime immediately before that upload.
+                    await self.submission_check()
+                with prepared.open() as handle:
+                    uploaded = await self.client.upload(
+                        fileobj=handle,
+                        filename=prepared.filename,
+                        content_type=prepared.content_type,
+                        subfolder=f"h3-webapp/series/{series_id}/legacy-normalized",
+                    )
+                uploaded_path = str(uploaded.get("path") or "")
+                if not uploaded_path:
+                    raise SeriesMediaError(recovery)
+                return {
+                    "path": uploaded_path,
+                    "sha256": str(prepared.metadata["sha256"]),
+                    "width": int(prepared.metadata["width"]),
+                    "height": int(prepared.metadata["height"]),
+                    "has_audio": bool(prepared.metadata.get("has_audio")),
+                }
+            except (asyncio.CancelledError, ComfyError):
+                raise
+            except Exception as exc:
+                raise SeriesMediaError(recovery) from exc
+            finally:
+                if prepared is not None:
+                    prepared.cleanup()
+        except (SeriesMediaError, KeyError, TypeError) as exc:
+            raise SeriesMediaError(recovery) from exc
+        return {
+            "path": path_value,
+            "sha256": digest,
+            "width": int(metadata["width"]),
+            "height": int(metadata["height"]),
+            "has_audio": bool(metadata.get("has_audio")),
+        }
+
+    async def preflight_series(self, series_id: str) -> dict[str, Any]:
+        """Backfill verified legacy dimensions, then admit the whole series."""
+
+        record = self.store.get(series_id)
+        if record is None:
+            raise SeriesNotFoundError("series not found")
+        document = record["document"]
+        # Reject known-unsafe legacy settings before any normalization can
+        # create a new private upload. Dimension/load checks follow recovery.
+        _validate_persisted_series_policy(document, str(record["status"]))
+        updates: list[dict[str, Any]] = []
+
+        for index, item in enumerate(document.get("references", {}).get("videos") or []):
+            if not isinstance(item, Mapping):
+                raise SeriesMediaError("a persisted video reference is invalid")
+            width, height = item.get("width"), item.get("height")
+            normalized_contract = (
+                isinstance(width, int)
+                and not isinstance(width, bool)
+                and width > 0
+                and isinstance(height, int)
+                and not isinstance(height, bool)
+                and height > 0
+                and width <= LONG_REFERENCE_VIDEO_MAX_EDGE
+                and height <= LONG_REFERENCE_VIDEO_MAX_EDGE
+                and width * height <= LONG_REFERENCE_VIDEO_MAX_PIXELS
+                and width % 32 == 0
+                and height % 32 == 0
+            )
+            if not normalized_contract:
+                recovered = await self._recover_legacy_reference_video(
+                    series_id=series_id,
+                    relative_path=item.get("path"),
+                    expected_sha256=item.get("sha256"),
+                    original_name=item.get("name"),
+                    label=str(item.get("label") or f"Video {index + 1}"),
+                    internal_continuity=False,
+                )
+                updates.append(
+                    {
+                        "kind": "shared",
+                        "index": index,
+                        "expected_path": str(item.get("path") or ""),
+                        "expected_digest": str(item.get("sha256") or ""),
+                        **recovered,
+                    }
+                )
+
+        for index, shot in enumerate(document.get("shots") or []):
+            continuity = shot.get("continuity_input") if isinstance(shot, Mapping) else None
+            if not isinstance(continuity, Mapping):
+                continue
+            width, height = continuity.get("video_width"), continuity.get("video_height")
+            normalized_contract = (
+                isinstance(width, int)
+                and not isinstance(width, bool)
+                and width > 0
+                and isinstance(height, int)
+                and not isinstance(height, bool)
+                and height > 0
+                and width <= LONG_REFERENCE_VIDEO_MAX_EDGE
+                and height <= LONG_REFERENCE_VIDEO_MAX_EDGE
+                and width * height <= LONG_REFERENCE_VIDEO_MAX_PIXELS
+                and width % 32 == 0
+                and height % 32 == 0
+            )
+            if not normalized_contract:
+                recovered = await self._recover_legacy_reference_video(
+                    series_id=series_id,
+                    relative_path=continuity.get("video_path"),
+                    expected_sha256=continuity.get("video_sha256"),
+                    original_name=continuity.get("video_name"),
+                    label=f"Shot {index + 1} continuity tail",
+                    internal_continuity=True,
+                )
+                updates.append(
+                    {
+                        "kind": "continuity",
+                        "index": index,
+                        "expected_path": str(continuity.get("video_path") or ""),
+                        "expected_digest": str(continuity.get("video_sha256") or ""),
+                        **recovered,
+                    }
+                )
+
+        if not updates:
+            _validate_persisted_series_admission(document, str(record["status"]))
+            return record
+
+        def backfill(current: dict[str, Any], status: str):
+            for update in updates:
+                kind = str(update["kind"])
+                index = int(update["index"])
+                if kind == "shared":
+                    target = current["references"]["videos"][index]
+                    path_field, digest_field = "path", "sha256"
+                else:
+                    target = current["shots"][index].get("continuity_input")
+                    path_field, digest_field = "video_path", "video_sha256"
+                if (
+                    not isinstance(target, Mapping)
+                    or str(target.get(path_field) or "") != update["expected_path"]
+                    or str(target.get(digest_field) or "") != update["expected_digest"]
+                ):
+                    raise SeriesMediaError(
+                        "series references changed during safety preflight; try again"
+                    )
+                if kind == "shared":
+                    target["path"] = update["path"]
+                    target["sha256"] = update["sha256"]
+                    target["width"] = update["width"]
+                    target["height"] = update["height"]
+                    target["has_audio"] = update["has_audio"]
+                else:
+                    target["video_path"] = update["path"]
+                    target["video_sha256"] = update["sha256"]
+                    target["video_width"] = update["width"]
+                    target["video_height"] = update["height"]
+            _validate_persisted_series_admission(current, status)
+            return current, status
+
+        return self.store.mutate(series_id, backfill)
 
     async def _verify_reference_integrity(
         self, document: Mapping[str, Any], shot_index: int
@@ -1700,12 +2208,19 @@ class SeriesRunner:
                     content_type="image/png",
                     subfolder=f"h3-webapp/series/{series_id}",
                 )
+            fallback_tail_width, fallback_tail_height = bounded_video_dimensions(
+                int(document["settings"]["width"]),
+                int(document["settings"]["height"]),
+            )
+            tail_metadata = tail.get("metadata") or {}
             continuity_input = {
                 "video_path": str(uploaded["path"]),
                 "video_name": str(tail["download_name"]),
                 "video_sha256": str(
                     (tail.get("metadata") or {}).get("sha256") or ""
                 ),
+                "video_width": int(tail_metadata.get("width") or fallback_tail_width),
+                "video_height": int(tail_metadata.get("height") or fallback_tail_height),
                 "image_path": str(uploaded_frame["path"]),
                 "image_name": str(frame["download_name"]),
                 "image_sha256": str(
@@ -2022,6 +2537,7 @@ class SeriesRunner:
                         f"Shot {shot_index + 1} uses {match.group(0)} but its reference policy omits it"
                     )
             shot["omit_shared_image_labels"] = omissions
+            validate_series_video_admission(document)
             return document, status
 
         async with self.submission_lock:
@@ -2038,6 +2554,7 @@ class SeriesRunner:
             raise RequestError("shot_index must be an integer")
         if not isinstance(regenerate_following, bool):
             raise RequestError("regenerate_following must be true or false")
+        await self.preflight_series(series_id)
 
         def retry_shot(document: dict[str, Any], status: str):
             if status not in {"paused", "failed", "cancelled", "completed"}:

@@ -14,6 +14,8 @@
 
 LocalVideoGen est une couche d'exploitation reproductible autour d'une installation externe et figée de ComfyUI et du paquet officiel aligné MiniMax H3. Il fournit l'application web H3 Studio limitée au loopback, l'acquisition de modèles contrôlée par sommes de vérification, des workflows T2V/I2V/R2V, la génération native conjointe vidéo-audio, un historique persistant et des contrôles prudents du cycle de vie, réglés pour deux RTX 4090 de 24 GiB et 128 GiB de RAM hôte.
 
+Pour une longue référence visuelle, utilisez **Long reference · 24 GiB safe** : `quality_int8_offload`, `match` et 704×1248 en portrait ou 1248×704 en paysage. Le contrôle d'admission vérifie dimensions et charge des références et bloque une tâche dangereuse avant son envoi au GPU.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ Consultez le [guide du workflow de série](../docs/series-workflow.md) pour la c
 
 ## Fonctionnalités
 
-- Profil de qualité maximale : DiT Ref2VA/FL2VA élagué en BF16, conditionneur Qwen3-VL NVFP4-AWQ aligné, VAE vidéo FP16, VAE audio FP32 et 25 étapes du modèle complet.
-- Placement des étapes sur deux GPU : GPU 0 exécute le DiT et le débruitage ; GPU 1 exécute le conditionnement Qwen et les VAE vidéo/audio. Aucun lien PCIe peer-to-peer n'est supposé.
+- La fidélité BF16 maximale concerne une courte référence vidéo visuelle ou le R2V avec images seules ; les longues références vidéo utilisent par défaut la voie INT8/offload mesurée et sûre sur 24 Gio.
+- Sur la station partagée, GPU 0 exécute par défaut toutes les étapes H3 et GPU 1 reste disponible pour LocalLLM. Seul `H3_AUX_DEVICE=gpu:1` explicite déplace Qwen et le VAE de référence vers GPU 1.
 - T2V, I2V et R2V multiréférence en local, avec profil de fidélité d'identité maximale et audio natif synchronisé.
 - Profils qualité, repli sur un seul GPU et aperçu INT8 Turbo en basse définition.
 - H3 local produit jusqu'à 768 pixels sur le côté court à 24 fps. L'étape distincte de régénération 2K de MiniMax est réservée à l'API et n'est pas présentée comme locale.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[Validation des imports et du graphe]
     V --> J[(Registre privé des tâches)]
     V -->|loopback :8188| C[ComfyUI figé]
-    C --> G0[GPU 0: DiT + débruitage]
-    C --> G1[GPU 1: Qwen + VAE vidéo/audio]
+    C --> G0[GPU 0: toutes les étapes H3 par défaut]
+    G1[GPU 1: réservée à LocalLLM par défaut]
+    C -. H3_AUX_DEVICE optionnel .-> G1
     C <--> R[RAM hôte: DynamicVRAM + déchargement asynchrone]
     M[Paquet de modèles vérifié par SHA-256] --> C
 ```

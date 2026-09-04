@@ -13,11 +13,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .media import h3_effective_video_dimensions
+
 
 FPS = 24
 MAX_PIXELS = 768 * 1344
 MAX_SEED = (1 << 64) - 1
 WORKFLOW_ID = "local-video-gen-minimax-h3-webapp"
+
+# A measured 24 GiB admission envelope for long R2V jobs.  The failed
+# 736x1312 + 736x1312, 345-frame runs reached the first denoising allocation
+# at 666,286,080 combined frame-pixels.  The successful 704x1248 + 576x1024
+# run used 506,603,520, so reject anything above the rounded 510M boundary
+# before ComfyUI can spend hours loading/conditioning it.
+LONG_REFERENCE_SAFE_PROFILE = "quality_int8_offload"
+LONG_REFERENCE_SAFE_REF_IMAGE_SIZE = "match"
+LONG_REFERENCE_MIN_SECONDS = 9.5
+LONG_REFERENCE_FRAME_PIXEL_LIMIT = 510_000_000
+LONG_REFERENCE_VIDEO_MAX_EDGE = 1024
+LONG_REFERENCE_VIDEO_MAX_PIXELS = 576 * 1024
+LONG_REFERENCE_PORTRAIT = (704, 1248)
+LONG_REFERENCE_LANDSCAPE = (1248, 704)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEXT_ENCODER_CONFIG = PROJECT_ROOT / "config" / "text-encoder-selection.json"
@@ -158,8 +174,8 @@ PROFILES: dict[str, Profile] = {
     ),
     "quality_int8_offload": Profile(
         id="quality_int8_offload",
-        label="Balanced quality · one-GPU compatible",
-        description="A lower-memory final-quality option when only one GPU is available.",
+        label="Long reference · 24 GiB safe",
+        description="The proven 25-step INT8/offload route for a long video reference on one 24 GiB GPU.",
         precision="int8",
         dual_gpu=False,
         turbo=False,
@@ -173,6 +189,8 @@ RESOLUTION_PRESETS = (
     {"id": "native_landscape", "label": "Native landscape · 1344×768", "width": 1344, "height": 768},
     {"id": "native_portrait", "label": "Native portrait · 768×1344", "width": 768, "height": 1344},
     {"id": "native_square", "label": "Native square · 768×768", "width": 768, "height": 768},
+    {"id": "long_reference_landscape", "label": "Long reference · 24 GiB safe · 1248×704", "width": 1248, "height": 704},
+    {"id": "long_reference_portrait", "label": "Long reference · 24 GiB safe · 704×1248", "width": 704, "height": 1248},
     {"id": "classic_landscape", "label": "Classic landscape · 1024×768", "width": 1024, "height": 768},
     {"id": "classic_portrait", "label": "Classic portrait · 768×1024", "width": 768, "height": 1024},
     {"id": "preview_landscape", "label": "Preview landscape · 864×480", "width": 864, "height": 480},
@@ -252,6 +270,102 @@ def _asset_list(value: Any, field: str, kind: str, maximum: int) -> tuple[Upload
     return tuple(_asset(item, field, kind) for item in value)  # type: ignore[arg-type]
 
 
+def _reference_video_pixels(asset: UploadedAsset) -> int:
+    """Return trusted H3-effective video pixels or fail closed."""
+
+    metadata = asset.metadata
+    if not isinstance(metadata, Mapping):
+        raise RequestError(
+            "R2V video references need trusted width and height metadata; "
+            "upload the video again so it can be safely normalized"
+        )
+    width = metadata.get("width")
+    height = metadata.get("height")
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width < 1
+        or height < 1
+    ):
+        raise RequestError(
+            "R2V video references have invalid normalized dimensions; "
+            "upload the video again"
+        )
+    effective_width, effective_height = h3_effective_video_dimensions(width, height)
+    if (
+        width > LONG_REFERENCE_VIDEO_MAX_EDGE
+        or height > LONG_REFERENCE_VIDEO_MAX_EDGE
+        or width * height > LONG_REFERENCE_VIDEO_MAX_PIXELS
+        or width % 32
+        or height % 32
+        or (effective_width, effective_height) != (width, height)
+    ):
+        raise RequestError(
+            "reference video dimensions do not satisfy the normalized H3 "
+            "contract (32-pixel axes, at most 1024 per edge and 589,824 "
+            "pixels); upload the source again for safe normalization"
+        )
+    return effective_width * effective_height
+
+
+def validate_video_reference_admission(
+    *,
+    mode: str,
+    profile: Profile,
+    ref_image_size: str,
+    width: int,
+    height: int,
+    length: int,
+    ref_images: Sequence[UploadedAsset] = (),
+    ref_videos: Sequence[UploadedAsset],
+    audio_conditioning_count: int = 0,
+) -> None:
+    """Enforce the measured one-image/one-video 24 GiB R2V envelope."""
+
+    if mode != "r2v" or not ref_videos:
+        return
+    is_long = length >= aligned_frame_count(LONG_REFERENCE_MIN_SECONDS)
+    if is_long and profile.id != LONG_REFERENCE_SAFE_PROFILE:
+        raise RequestError(
+            "R2V jobs of 243 aligned frames (about 9.5 seconds) or longer "
+            "with a visual video reference "
+            f"require the {LONG_REFERENCE_SAFE_PROFILE} profile"
+        )
+    if is_long and ref_image_size != LONG_REFERENCE_SAFE_REF_IMAGE_SIZE:
+        raise RequestError(
+            "R2V jobs of 243 aligned frames (about 9.5 seconds) or longer "
+            "with a visual video reference "
+            f"require ref_image_size={LONG_REFERENCE_SAFE_REF_IMAGE_SIZE}"
+        )
+    if is_long and audio_conditioning_count > 1:
+        raise RequestError(
+            "Long visual-video R2V is admitted with at most one audio "
+            "conditioning source; remove extra video/audio references or "
+            "shorten the request below 243 aligned frames"
+        )
+
+    video_pixels = sum(
+        _reference_video_pixels(asset) for asset in ref_videos
+    )
+    # The successful calibration included one match-sized still. Charge each
+    # still beyond that baseline as another output-sized conditioning canvas.
+    additional_still_pixels = (
+        max(0, len(ref_images) - 1) * width * height
+        if ref_image_size == "match"
+        else 0
+    )
+    combined = length * (width * height + video_pixels) + additional_still_pixels
+    if combined > LONG_REFERENCE_FRAME_PIXEL_LIMIT:
+        raise RequestError(
+            f"R2V load is {combined:,} combined frame-pixels, above the "
+            f"24 GiB safety limit of {LONG_REFERENCE_FRAME_PIXEL_LIMIT:,}; use "
+            "the Long reference · 24 GiB safe preset with one normalized visual "
+            "video and one matched still, or reduce duration/canvas/reference count"
+        )
+
+
 def parse_render_spec(payload: Mapping[str, Any], assets: Mapping[str, Any]) -> RenderSpec:
     if not isinstance(payload, Mapping):
         raise RequestError("request body must be a JSON object")
@@ -260,7 +374,19 @@ def parse_render_spec(payload: Mapping[str, Any], assets: Mapping[str, Any]) -> 
     if mode not in {"t2v", "i2v", "r2v"}:
         raise RequestError("mode must be t2v, i2v, or r2v")
 
-    profile_id = str(payload.get("profile", "quality_bf16_dual"))
+    raw_ref_videos = assets.get("ref_videos") or []
+    has_visual_video_reference = (
+        mode == "r2v"
+        and not isinstance(raw_ref_videos, (str, bytes))
+        and isinstance(raw_ref_videos, Sequence)
+        and bool(raw_ref_videos)
+    )
+    default_profile = (
+        LONG_REFERENCE_SAFE_PROFILE
+        if has_visual_video_reference
+        else "quality_bf16_dual"
+    )
+    profile_id = str(payload.get("profile") or default_profile)
     profile = PROFILES.get(profile_id)
     if profile is None:
         raise RequestError("unknown quality profile")
@@ -272,8 +398,13 @@ def parse_render_spec(payload: Mapping[str, Any], assets: Mapping[str, Any]) -> 
     if len(prompt) > 12_000:
         raise RequestError("prompt is longer than 12,000 characters")
 
-    width = _plain_int(payload.get("width", 1344), "width")
-    height = _plain_int(payload.get("height", 768), "height")
+    default_width, default_height = (
+        LONG_REFERENCE_LANDSCAPE
+        if has_visual_video_reference
+        else (1344, 768)
+    )
+    width = _plain_int(payload.get("width", default_width), "width")
+    height = _plain_int(payload.get("height", default_height), "height")
     if width < 256 or height < 256 or width > 1344 or height > 1344:
         raise RequestError("width and height must each be between 256 and 1344")
     if width % 32 or height % 32:
@@ -329,6 +460,29 @@ def parse_render_spec(payload: Mapping[str, Any], assets: Mapping[str, Any]) -> 
         if not any((ref_images, ref_videos, ref_audios)):
             raise RequestError("R2V requires at least one image, video, or audio reference")
 
+    length = aligned_frame_count(duration)
+    validate_video_reference_admission(
+        mode=mode,
+        profile=profile,
+        ref_image_size=ref_image_size,
+        width=width,
+        height=height,
+        length=length,
+        ref_images=ref_images,
+        ref_videos=ref_videos,
+        audio_conditioning_count=(
+            len(ref_audios)
+            + sum(
+                override is not None
+                or bool(
+                    isinstance(video.metadata, Mapping)
+                    and video.metadata.get("has_audio")
+                )
+                for video, override in zip(ref_videos, video_audios)
+            )
+        ),
+    )
+
     return RenderSpec(
         mode=mode,
         profile=profile,
@@ -336,7 +490,7 @@ def parse_render_spec(payload: Mapping[str, Any], assets: Mapping[str, Any]) -> 
         width=width,
         height=height,
         duration=duration,
-        length=aligned_frame_count(duration),
+        length=length,
         seed=seed,
         first_frame=first_frame,
         last_frame=last_frame,
@@ -444,7 +598,7 @@ def compile_prompt(spec: RenderSpec) -> dict[str, dict[str, Any]]:
             if audio_override is not None:
                 audio_loader = graph.add("LoadAudio", audio=audio_override.path)
                 conditioning_inputs[f"ref_video_audios.ref_video_audio_{index}"] = graph.link(audio_loader)
-            else:
+            elif isinstance(asset.metadata, Mapping) and asset.metadata.get("has_audio"):
                 conditioning_inputs[f"ref_video_audios.ref_video_audio_{index}"] = graph.link(components, 1)
         for index, asset in enumerate(spec.ref_audios):
             loader = graph.add("LoadAudio", audio=asset.path)
@@ -522,6 +676,49 @@ def public_config() -> dict[str, Any]:
         ],
         "profiles": profiles,
         "resolutions": list(RESOLUTION_PRESETS),
+        "long_reference": {
+            "id": "long_reference_24gb_safe",
+            "label": "Long reference · 24 GiB safe",
+            "profile": LONG_REFERENCE_SAFE_PROFILE,
+            "ref_image_size": LONG_REFERENCE_SAFE_REF_IMAGE_SIZE,
+            "duration": 14,
+            "length": aligned_frame_count(14),
+            "minimum_duration": LONG_REFERENCE_MIN_SECONDS,
+            "minimum_length": aligned_frame_count(LONG_REFERENCE_MIN_SECONDS),
+            "frame_pixel_limit": LONG_REFERENCE_FRAME_PIXEL_LIMIT,
+            "reference_mix": {
+                "calibrated_match_images": 1,
+                "additional_match_still_charge": "one_output_canvas_each",
+                "short_max_policy": (
+                    "allowed_below_243_aligned_frames_but_outside_the_"
+                    "calibrated_24_gib_guarantee"
+                ),
+                "long_audio_conditioning_max": 1,
+                "audio_policy": (
+                    "Count only audio inputs actually wired into H3. For long "
+                    "visual-video shots, a shared video soundtrack, explicit "
+                    "override, or standalone audio makes the continuity tail "
+                    "visual-only; at most one source is admitted. Short shots "
+                    "retain legacy tail audio alongside other guides."
+                ),
+            },
+            "video_reference": {
+                "max_edge": LONG_REFERENCE_VIDEO_MAX_EDGE,
+                "max_pixels": LONG_REFERENCE_VIDEO_MAX_PIXELS,
+                "portrait": {"width": 576, "height": 1024},
+                "landscape": {"width": 1024, "height": 576},
+            },
+            "portrait": {
+                "resolution": "long_reference_portrait",
+                "width": LONG_REFERENCE_PORTRAIT[0],
+                "height": LONG_REFERENCE_PORTRAIT[1],
+            },
+            "landscape": {
+                "resolution": "long_reference_landscape",
+                "width": LONG_REFERENCE_LANDSCAPE[0],
+                "height": LONG_REFERENCE_LANDSCAPE[1],
+            },
+        },
         "defaults": {
             "mode": "t2v",
             "profile": "preview_int8_turbo_dual",

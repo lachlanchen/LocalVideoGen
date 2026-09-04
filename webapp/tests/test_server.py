@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tempfile
@@ -15,7 +16,12 @@ from PIL import Image
 from webapp.comfy_client import ComfyError
 from webapp.job_store import JobStore
 from webapp.series_runner import LALACHAN_REFERENCE_LABELS
-from webapp.server import ASSETS_KEY, MISSING_JOB_GRACE_MS, SERIES_KEY, create_app
+from webapp.server import (
+    ASSETS_KEY,
+    MISSING_JOB_GRACE_MS,
+    SERIES_KEY,
+    create_app,
+)
 from webapp.workflows import AUX_DEVICE_ENV, UploadedAsset
 
 
@@ -119,6 +125,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         private.mkdir(mode=0o700)
         self.output_root = root / "output"
         self.output_root.mkdir()
+        self.input_root = root / "input"
+        self.input_root.mkdir()
         self.store = JobStore(private / "jobs.sqlite3", max_terminal_jobs=20)
         self.comfy = FakeComfy()
         self.model_status = patch(
@@ -132,7 +140,14 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.model_status.start()
         self.runtime_status_mock = self.runtime_status.start()
         self.client = TestClient(
-            TestServer(create_app(self.comfy, job_store=self.store, output_root=self.output_root))
+            TestServer(
+                create_app(
+                    self.comfy,
+                    job_store=self.store,
+                    output_root=self.output_root,
+                    input_root=self.input_root,
+                )
+            )
         )
         await self.client.start_server()
 
@@ -153,6 +168,15 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("world_travel", config["series"]["templates"])
         self.assertEqual(
+            config["series"]["default_settings"],
+            {
+                "profile": "quality_int8_offload",
+                "width": 1248,
+                "height": 704,
+                "ref_image_size": "match",
+            },
+        )
+        self.assertEqual(
             config["series"]["world_travel_scene_reference_per_shot"], 1
         )
         policy = config["series"]["shot_reference_policy"]
@@ -170,6 +194,19 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             capability["maximum_quality_profile"], "quality_bf16_dual"
         )
+        self.assertEqual(
+            capability["long_reference_safe_profile"], "quality_int8_offload"
+        )
+        safe = config["long_reference"]
+        self.assertEqual(safe["label"], "Long reference · 24 GiB safe")
+        self.assertEqual((safe["duration"], safe["length"]), (14, 345))
+        self.assertEqual(
+            (safe["portrait"]["width"], safe["portrait"]["height"]),
+            (704, 1248),
+        )
+        self.assertEqual(safe["profile"], "quality_int8_offload")
+        self.assertEqual(safe["ref_image_size"], "match")
+        self.assertEqual(safe["frame_pixel_limit"], 510_000_000)
         picture_slots = capability["picture_slots"]
         self.assertEqual(
             picture_slots["shared"],
@@ -222,7 +259,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uploads["video"]["source_audio_sample_rate_max"], 384_000)
         self.assertEqual(uploads["video"]["source_audio_channels_max"], 32)
         self.assertEqual(uploads["video"]["source_streams_max"], 32)
-        self.assertEqual(uploads["video"]["normalized"]["max_edge"], 2048)
+        self.assertEqual(uploads["video"]["normalized"]["max_edge"], 1024)
+        self.assertEqual(uploads["video"]["normalized"]["max_pixels"], 576 * 1024)
         self.assertEqual(uploads["video"]["normalized"]["fps"], 24)
         self.assertEqual(uploads["video"]["normalized"]["audio_codec"], "AAC")
         self.assertEqual(uploads["audio"]["source_max_bytes"], 100 * 1024 * 1024)
@@ -478,6 +516,47 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["session"]["title"], payload["prompt"])
         self.assertEqual(session["session"]["mode"], "t2v")
 
+    async def test_tampered_single_video_reference_never_reaches_upstream_submit(self) -> None:
+        relative = Path("h3-webapp/video/reference.mp4")
+        target = self.input_root / relative
+        target.parent.mkdir(parents=True)
+        trusted = b"trusted normalized reference"
+        target.write_bytes(trusted)
+        record = self.client.app[ASSETS_KEY].register(
+            UploadedAsset(
+                "video",
+                relative.as_posix(),
+                "reference.mp4",
+                {
+                    "sha256": hashlib.sha256(trusted).hexdigest(),
+                    "width": 576,
+                    "height": 1024,
+                    "has_audio": False,
+                },
+            ),
+            len(trusted),
+        )
+        target.write_bytes(b"replaced after the upload handle was issued")
+
+        response = await self.client.post(
+            "/api/renders",
+            json={
+                "mode": "r2v",
+                "profile": "quality_int8_offload",
+                "prompt": "Keep the reference motion.",
+                "width": 512,
+                "height": 512,
+                "duration": 10,
+                "ref_image_size": "match",
+                "ref_videos": [record.token],
+            },
+        )
+
+        self.assertEqual(response.status, 409, await response.text())
+        self.assertIn("changed after upload", (await response.json())["error"])
+        self.assertEqual(self.comfy.submissions, [])
+        self.assertEqual(self.store.active(limit=1), [])
+
     async def test_series_api_keeps_upload_locations_private_and_waits_for_manual_job(self) -> None:
         source = io.BytesIO()
         Image.new("RGB", (37, 23), (10, 20, 30)).save(source, "PNG")
@@ -492,7 +571,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                 "profile": "quality_bf16_dual",
                 "width": 1024,
                 "height": 768,
-                "ref_image_size": "max",
+                "ref_image_size": "match",
                 "continuity_seconds": 3,
                 "advance": True,
             },

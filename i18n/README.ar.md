@@ -14,6 +14,8 @@
 
 LocalVideoGen طبقة تشغيل قابلة لإعادة الإنتاج فوق تثبيت خارجي مثبت الإصدار من ComfyUI وحزمة MiniMax H3 الرسمية المتوافقة. يوفّر تطبيق H3 Studio عبر واجهة loopback المحلية فقط، وتنزيل النماذج المشروط بمجاميع التحقق، ومسارات T2V/I2V/R2V، وتوليد الفيديو والصوت الأصليين معًا، وسجل مهام دائمًا، وضوابط محافظة لدورة الحياة مضبوطة لبطاقتي RTX 4090 بسعة 24 GiB وذاكرة مضيفة قدرها 128 GiB.
 
+للمراجع المرئية الطويلة، استخدم إعداد **Long reference · 24 GiB safe**: ‏`quality_int8_offload` مع `match` ومقاس 704×1248 عمودي أو 1248×704 أفقي. تتحقق بوابة ما قبل الإرسال من الأبعاد وحمل المراجع، وترفض المهمة قبل وصولها إلى GPU إذا تجاوزت الحد الآمن.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ LocalVideoGen طبقة تشغيل قابلة لإعادة الإنتاج فوق 
 
 ## ما الذي يقدمه
 
-- إعداد أعلى جودة: ‏DiT من Ref2VA/FL2VA مختزل بدقة BF16، ومكيّف Qwen3-VL من NVFP4-AWQ متوافق، وVAE فيديو FP16، وVAE صوت FP32، و25 خطوة بالنموذج الكامل.
-- توزيع المراحل على بطاقتين: تنفذ GPU 0 ‏DiT وإزالة الضوضاء، بينما تنفذ GPU 1 تكييف Qwen ومرحلتي VAE للفيديو والصوت. لا يُفترض توفر مسار PCIe peer-to-peer.
+- إعداد BF16 بأعلى دقة للمراجع المرئية القصيرة أو R2V المعتمد على الصور فقط؛ أما مراجع الفيديو الطويلة فتستخدم افتراضيًا مسار INT8/offload الآمن المقاس بسعة 24 GiB.
+- في محطة العمل المشتركة تنفذ GPU 0 جميع مراحل H3 افتراضيًا وتبقى GPU 1 متاحة لـ LocalLLM. ينقل الضبط الصريح `H3_AUX_DEVICE=gpu:1` تكييف Qwen وVAE المرجعي إلى GPU 1.
 - ‏T2V وI2V وR2V متعدد المراجع محليًا، بما فيه إعداد max-identity وصوت أصلي متزامن.
 - إعدادات للجودة، والرجوع إلى بطاقة واحدة، ومعاينة INT8 Turbo منخفضة الدقة.
 - يصل خرج H3 المحلي إلى ضلع قصير 768 بكسل عند 24 fps. مرحلة إعادة التوليد 2K المنفصلة لدى MiniMax متاحة عبر API فقط ولا تُقدّم بوصفها ميزة محلية.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[التحقق من الرفع والرسم]
     V --> J[(سجل مهام خاص)]
     V -->|loopback :8188| C[ComfyUI مثبت الإصدار]
-    C --> G0[GPU 0: DiT + إزالة الضوضاء]
-    C --> G1[GPU 1: Qwen + VAE فيديو/صوت]
+    C --> G0[GPU 0: كل مراحل H3 افتراضيًا]
+    G1[GPU 1: محجوزة لـ LocalLLM افتراضيًا]
+    C -. H3_AUX_DEVICE اختياري .-> G1
     C <--> R[RAM المضيف: DynamicVRAM + offload غير متزامن]
     M[حزمة نماذج متحققة عبر SHA-256] --> C
 ```

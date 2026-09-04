@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import ipaddress
 import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -31,7 +33,12 @@ from .job_store import (
     JobStoreError,
     JobStoreValidationError,
 )
-from .media import DEFAULT_LIMITS, prepare_upload
+from .media import (
+    DEFAULT_LIMITS,
+    MediaValidationError,
+    prepare_upload,
+    validate_video_probe,
+)
 from .series_media import SeriesMedia, SeriesMediaError
 from .series_runner import (
     LALACHAN_REFERENCE_LABELS,
@@ -83,6 +90,7 @@ ASSETS_KEY = web.AppKey("h3.assets")
 JOBS_KEY = web.AppKey("h3.jobs")
 SETTINGS_KEY = web.AppKey("h3.settings")
 OUTPUT_ROOT_KEY = web.AppKey("h3.output_root")
+INPUT_ROOT_KEY = web.AppKey("h3.input_root")
 JOB_WATCHER_KEY = web.AppKey("h3.job_watcher")
 SERIES_KEY = web.AppKey("h3.series")
 SERIES_MEDIA_KEY = web.AppKey("h3.series_media")
@@ -90,6 +98,7 @@ SERIES_RUNNER_KEY = web.AppKey("h3.series_runner")
 SUBMISSION_LOCK_KEY = web.AppKey("h3.submission_lock")
 MISSING_JOB_GRACE_MS = 5 * 60 * 1000
 SERIES_API_VERSION = 1
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 UPLOAD_RULES: dict[str, dict[str, Any]] = {
     "image": {
@@ -311,6 +320,121 @@ def _resolve_asset_payload(payload: Mapping[str, Any], registry: AssetRegistry) 
         "ref_video_audios": ref_video_audios,
         "ref_audios": resolve_list("ref_audios", "audio", 3),
     }
+
+
+def _reference_assets(assets: Mapping[str, Any]) -> list[UploadedAsset]:
+    """Flatten resolved Single Clip inputs in their actual graph order."""
+
+    result: list[UploadedAsset] = []
+    for key in ("first_frame", "last_frame"):
+        item = assets.get(key)
+        if isinstance(item, UploadedAsset):
+            result.append(item)
+    for key in ("ref_images", "ref_videos", "ref_video_audios", "ref_audios"):
+        items = assets.get(key) or []
+        if isinstance(items, (str, bytes)) or not isinstance(items, list):
+            continue
+        result.extend(item for item in items if isinstance(item, UploadedAsset))
+    return result
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def _verify_single_reference_integrity(
+    assets: Mapping[str, Any],
+    *,
+    input_root: Path | None,
+    media: SeriesMedia,
+) -> None:
+    """Recheck every resolved input immediately before upstream submission."""
+
+    references = _reference_assets(assets)
+    if not references:
+        return
+    if input_root is None:
+        raise SeriesMediaError(
+            "the trusted ComfyUI input directory is unavailable; restart this "
+            "project's H3 Studio before submitting references"
+        )
+    root = input_root.resolve()
+    for asset in references:
+        metadata = asset.metadata
+        digest = (
+            str(metadata.get("sha256") or "").lower()
+            if isinstance(metadata, Mapping)
+            else ""
+        )
+        if not SHA256_PATTERN.fullmatch(digest):
+            raise SeriesMediaError(
+                f"reference '{asset.original_name or asset.kind}' has no trusted "
+                "upload fingerprint; remove it and upload it again"
+            )
+        path_value = str(asset.path or "")
+        relative = PurePosixPath(path_value)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or "\\" in path_value
+        ):
+            raise SeriesMediaError("a Single Clip reference has an unsafe input path")
+        candidate = root.joinpath(*relative.parts)
+        try:
+            cursor = root
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise OSError("symbolic reference")
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+            if not resolved.is_file():
+                raise OSError("not a regular file")
+            actual_digest = await asyncio.to_thread(_sha256_file, resolved)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SeriesMediaError(
+                f"reference '{asset.original_name or asset.kind}' is no longer "
+                "an owned regular input; remove it and upload it again"
+            ) from exc
+        if actual_digest != digest:
+            raise SeriesMediaError(
+                f"reference '{asset.original_name or asset.kind}' changed after "
+                "upload; refusing the GPU submission"
+            )
+        if asset.kind != "video":
+            continue
+        try:
+            probed = validate_video_probe(
+                await media.probe(resolved), normalized=True
+            )
+            stored_width = metadata.get("width")
+            stored_height = metadata.get("height")
+            stored_audio = metadata.get("has_audio")
+            if (
+                isinstance(stored_width, bool)
+                or not isinstance(stored_width, int)
+                or isinstance(stored_height, bool)
+                or not isinstance(stored_height, int)
+                or not isinstance(stored_audio, bool)
+                or int(probed["width"]) != stored_width
+                or int(probed["height"]) != stored_height
+                or bool(probed["has_audio"]) != stored_audio
+                or int(probed.get("rotation") or 0) != 0
+            ):
+                raise MediaValidationError(
+                    "normalized video metadata no longer matches its upload record"
+                )
+        except (MediaValidationError, KeyError, TypeError, ValueError) as exc:
+            raise SeriesMediaError(
+                f"reference video '{asset.original_name or 'video'}' no longer "
+                "matches the normalized H3 input contract; remove it and upload "
+                "it again"
+            ) from exc
 
 
 def _job_summary(job: Mapping[str, Any], client: ComfyClient) -> dict[str, Any]:
@@ -617,6 +741,7 @@ def create_app(
     series_store: SeriesStore | None = None,
     series_media: SeriesMedia | None = None,
     series_runner: SeriesRunner | None = None,
+    input_root: Path | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=620 * 1024 * 1024,
@@ -633,6 +758,15 @@ def create_app(
     app[SETTINGS_KEY] = settings_store or SettingsStore(settings_path)
     app[SUBMISSION_LOCK_KEY] = asyncio.Lock()
     app[OUTPUT_ROOT_KEY] = (output_root or DEFAULT_OUTPUT_ROOT).resolve()
+    app[INPUT_ROOT_KEY] = (
+        input_root.resolve()
+        if input_root is not None
+        else (
+            (PROJECT_ROOT / "ComfyUI" / "input").resolve()
+            if isinstance(app[COMFY_KEY], ComfyClient)
+            else None
+        )
+    )
     if series_store is None:
         series_db = (
             app[JOBS_KEY].path.with_name("webapp-series.sqlite3")
@@ -669,11 +803,7 @@ def create_app(
         submission_lock=app[SUBMISSION_LOCK_KEY],
         runtime_check=verify_series_runtime,
         submission_check=verify_series_submission,
-        input_root=(
-            PROJECT_ROOT / "ComfyUI" / "input"
-            if isinstance(app[COMFY_KEY], ComfyClient)
-            else None
-        ),
+        input_root=app[INPUT_ROOT_KEY],
         system_prompt_provider=lambda: str(
             app[SETTINGS_KEY].get()["system_prompt"]
         ),
@@ -789,6 +919,7 @@ def create_app(
                     "pixel_format": "yuv420p",
                     "fps": DEFAULT_LIMITS.video_fps,
                     "max_edge": DEFAULT_LIMITS.normalized_video_edge,
+                    "max_pixels": DEFAULT_LIMITS.normalized_video_pixels,
                     "audio_optional": True,
                     "audio_codec": "AAC",
                     "audio_sample_rate": DEFAULT_LIMITS.audio_sample_rate,
@@ -824,6 +955,12 @@ def create_app(
             "shared_videos_max": 2,
             "shared_audio_max": 3,
             "continuity_seconds": [0, 2, 3, 4],
+            "default_settings": {
+                "profile": data["long_reference"]["profile"],
+                "width": data["long_reference"]["landscape"]["width"],
+                "height": data["long_reference"]["landscape"]["height"],
+                "ref_image_size": data["long_reference"]["ref_image_size"],
+            },
             "lalachan_picture_labels": list(LALACHAN_REFERENCE_LABELS),
             "world_travel_scene_reference_per_shot": 1,
             "sequential_only": True,
@@ -842,6 +979,7 @@ def create_app(
                     "template": "world_travel",
                     "render_mode": "r2v",
                     "maximum_quality_profile": "quality_bf16_dual",
+                    "long_reference_safe_profile": "quality_int8_offload",
                     "recommended_continuity_seconds": 2,
                     "persistent_shared_image_labels": [
                         label
@@ -1107,6 +1245,11 @@ def create_app(
                     "Another local H3 render is active; wait for it to finish before starting a Single Clip.",
                     status=409,
                 )
+            await _verify_single_reference_integrity(
+                resolved,
+                input_root=request.app[INPUT_ROOT_KEY],
+                media=request.app[SERIES_MEDIA_KEY],
+            )
             request.app[JOBS_KEY].register(prompt_id, metadata, status="submitting")
             try:
                 result = await request.app[COMFY_KEY].submit(prompt, metadata, prompt_id)
@@ -1184,6 +1327,7 @@ def create_app(
         series_id, existing = series_record(request)
         if existing["status"] != "ready":
             raise RequestError("only a ready series can start")
+        existing = await request.app[SERIES_RUNNER_KEY].preflight_series(series_id)
         if not getattr(request.app[SERIES_MEDIA_KEY], "available", True):
             raise ComfyError(
                 "ffmpeg and ffprobe are required for series validation", status=409
@@ -1227,6 +1371,7 @@ def create_app(
     @routes.post("/api/series/{series_id}/resume")
     async def resume_series(request: web.Request) -> web.Response:
         series_id, _ = series_record(request)
+        await request.app[SERIES_RUNNER_KEY].preflight_series(series_id)
         record = request.app[SERIES_RUNNER_KEY].resume(series_id)
         return web.json_response(public_series(record, request.app[COMFY_KEY]), status=202)
 

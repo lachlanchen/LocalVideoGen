@@ -14,6 +14,8 @@
 
 LocalVideoGen là lớp vận hành có thể tái lập bao quanh một bản cài ComfyUI bên ngoài đã ghim phiên bản và gói MiniMax H3 chính thức đã căn chỉnh. Dự án cung cấp webapp H3 Studio chỉ truy cập qua loopback, tải mô hình có cổng kiểm tra checksum, các workflow T2V/I2V/R2V, sinh video và âm thanh nguyên bản đồng thời, lịch sử tác vụ bền vững và kiểm soát vòng đời thận trọng được tinh chỉnh cho hai RTX 4090 24 GiB cùng 128 GiB RAM máy chủ.
 
+Với tham chiếu hình ảnh dài, hãy dùng **Long reference · 24 GiB safe**: `quality_int8_offload`, `match` và khung dọc 704×1248 hoặc ngang 1248×704. Cổng kiểm tra trước khi gửi sẽ xác minh kích thước và tải tham chiếu, đồng thời từ chối tác vụ không an toàn trước khi chuyển tới GPU.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ Xem [hướng dẫn quy trình series](../docs/series-workflow.md) để biết 
 
 ## Những gì dự án cung cấp
 
-- Preset chất lượng cao nhất: DiT Ref2VA/FL2VA BF16 đã lược gọn, conditioner Qwen3-VL NVFP4-AWQ đã căn chỉnh, VAE video FP16, VAE âm thanh FP32 và 25 bước toàn mô hình.
-- Đặt giai đoạn trên hai GPU: GPU 0 chạy DiT và denoising; GPU 1 chạy Qwen conditioning cùng các giai đoạn VAE video/âm thanh. Không giả định có đường PCIe peer-to-peer.
+- Độ trung thực BF16 cao nhất dành cho tham chiếu video ngắn hoặc R2V chỉ dùng ảnh; tham chiếu video dài mặc định dùng tuyến INT8/offload đã đo và an toàn cho 24 GiB.
+- Trên máy trạm dùng chung, GPU 0 mặc định chạy mọi giai đoạn H3 và GPU 1 được để dành cho LocalLLM. Chỉ `H3_AUX_DEVICE=gpu:1` tường minh mới chuyển Qwen và VAE tham chiếu sang GPU 1.
 - T2V, I2V và R2V đa tham chiếu cục bộ, gồm preset max-identity và âm thanh nguyên bản đồng bộ.
 - Các profile chất lượng, dự phòng một GPU và xem trước INT8 Turbo độ phân giải thấp.
 - H3 cục bộ xuất tối đa cạnh ngắn 768 px ở 24 fps. Giai đoạn tái tạo 2K riêng của MiniMax chỉ có qua API và không được giới thiệu như tính năng cục bộ.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[Xác thực tệp tải lên và đồ thị]
     V --> J[(Sổ tác vụ riêng tư)]
     V -->|loopback :8188| C[ComfyUI đã ghim]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + VAE video/âm thanh]
+    C --> G0[GPU 0: mọi giai đoạn H3 theo mặc định]
+    G1[GPU 1: mặc định dành cho LocalLLM]
+    C -. H3_AUX_DEVICE tùy chọn .-> G1
     C <--> R[RAM máy chủ: DynamicVRAM + offload bất đồng bộ]
     M[Gói mô hình đã xác thực SHA-256] --> C
 ```

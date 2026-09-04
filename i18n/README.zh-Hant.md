@@ -14,6 +14,8 @@
 
 LocalVideoGen 是一個可重現的運行層，圍繞固定版本的外部 ComfyUI 安裝與官方對齊版 MiniMax H3 模型套件建構。它提供僅限本機回環存取的 H3 Studio 網頁應用程式、以校驗碼為門檻的模型取得、T2V/I2V/R2V 工作流程預設、原生影片與音訊聯合生成、持久任務歷史，以及為兩張 24 GiB RTX 4090 與 128 GiB 主機記憶體調校的保守生命週期控制。
 
+長影片參考請使用 **Long reference · 24 GiB safe**：`quality_int8_offload`、`match`，以及直向 704×1248 或橫向 1248×704。提交前防護會檢查尺寸與參考負載，超過安全上限時會在工作送入 GPU 前拒絕。
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ LocalVideoGen 是一個可重現的運行層，圍繞固定版本的外部 Comfy
 
 ## 功能概覽
 
-- 最高品質預設：裁剪版 BF16 Ref2VA/FL2VA DiT、對齊的 NVFP4-AWQ Qwen3-VL 條件編碼器、FP16 影片 VAE、FP32 音訊 VAE，以及完整模型 25 步採樣。
-- 雙 GPU 階段配置：GPU 0 執行 DiT 與去雜訊；GPU 1 執行 Qwen 條件編碼及影片/音訊 VAE 階段，不假設存在 PCIe 點對點通路。
+- BF16 最高保真適用於短影片視覺參考或僅影像 R2V；長影片參考預設採用經過實測、適配 24 GiB 的安全 INT8/offload 路線。
+- 在共享工作站上，預設由 GPU 0 執行全部 H3 階段，GPU 1 留給 LocalLLM；只有明確設定 `H3_AUX_DEVICE=gpu:1` 才會把 Qwen 與參考 VAE 移到 GPU 1。
 - 本機 T2V、I2V 與多參考 R2V，包含最高身分一致性參考預設與原生同步音訊。
 - 提供品質模式、單 GPU 備援模式與低解析度 INT8 Turbo 預覽模式。
 - 本機 H3 輸出在 24 fps 下支援最高 768 像素短邊。MiniMax 獨立的 2K 再生成階段僅提供 API，本專案不將其描述為本機功能。
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[上傳與圖驗證]
     V --> J[(私有任務登錄)]
     V -->|本機回環 :8188| C[固定版本 ComfyUI]
-    C --> G0[GPU 0: DiT + 去雜訊]
-    C --> G1[GPU 1: Qwen + 影片/音訊 VAE]
+    C --> G0[GPU 0: 預設執行全部 H3 階段]
+    G1[GPU 1: 預設留給 LocalLLM]
+    C -. 可選 H3_AUX_DEVICE .-> G1
     C <--> R[主機記憶體: DynamicVRAM + 非同步卸載]
     M[經 SHA-256 驗證的模型套件] --> C
 ```

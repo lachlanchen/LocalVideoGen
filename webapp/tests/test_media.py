@@ -15,6 +15,8 @@ from webapp.media import (
     DEFAULT_LIMITS,
     MediaToolUnavailable,
     MediaValidationError,
+    bounded_video_dimensions,
+    h3_effective_video_dimensions,
     prepare_upload,
     validate_audio_probe,
     validate_video_probe,
@@ -68,6 +70,40 @@ def _audio_probe(
 
 
 class ProbeValidationTests(unittest.TestCase):
+    def test_long_reference_dimensions_fit_edge_and_pixel_caps(self):
+        self.assertEqual(bounded_video_dimensions(720, 1280), (576, 1024))
+        self.assertEqual(bounded_video_dimensions(1280, 720), (1024, 576))
+        self.assertEqual(bounded_video_dimensions(1024, 1024), (768, 768))
+        self.assertEqual(bounded_video_dimensions(624, 944), (608, 928))
+        self.assertEqual(bounded_video_dimensions(600, 985), (576, 960))
+        for width, height in (
+            (736, 1312),
+            (1312, 736),
+            (1024, 1024),
+            (624, 944),
+        ):
+            bounded_width, bounded_height = bounded_video_dimensions(width, height)
+            self.assertLessEqual(max(bounded_width, bounded_height), 1024)
+            self.assertLessEqual(bounded_width * bounded_height, 576 * 1024)
+            self.assertEqual(bounded_width % 32, 0)
+            self.assertEqual(bounded_height % 32, 0)
+            self.assertEqual(
+                h3_effective_video_dimensions(bounded_width, bounded_height),
+                (bounded_width, bounded_height),
+            )
+
+    def test_h3_effective_dimensions_reproduce_internal_32_pixel_rounding(self):
+        self.assertEqual(h3_effective_video_dimensions(624, 944), (640, 960))
+
+    def test_video_probe_uses_right_angle_display_rotation(self):
+        document = _video_probe(width=1920, height=1080)
+        document["streams"][0]["side_data_list"] = [{"rotation": -90}]
+        result = validate_video_probe(document)
+        self.assertEqual(result["rotation"], 270)
+        self.assertEqual(
+            (result["display_width"], result["display_height"]), (1080, 1920)
+        )
+
     def test_video_probe_is_sanitized(self):
         result = validate_video_probe(_video_probe())
         self.assertEqual(result["width"], 1920)
@@ -93,7 +129,17 @@ class ProbeValidationTests(unittest.TestCase):
 
     def test_normalized_video_must_be_24fps(self):
         with self.assertRaisesRegex(MediaValidationError, "constant 24 fps"):
-            validate_video_probe(_video_probe(fps="24000/1001"), normalized=True)
+            validate_video_probe(
+                _video_probe(width=576, height=1024, fps="24000/1001"),
+                normalized=True,
+            )
+
+    def test_normalized_video_dimensions_must_match_h3_alignment(self):
+        with self.assertRaisesRegex(MediaValidationError, "H3-aligned to 32"):
+            validate_video_probe(
+                _video_probe(width=624, height=944, fps="24/1"),
+                normalized=True,
+            )
 
     def test_audio_requires_stream_and_bounded_duration(self):
         with self.assertRaisesRegex(MediaValidationError, "no decodable audio stream"):
@@ -259,6 +305,22 @@ class FfmpegPreparationTests(unittest.IsolatedAsyncioTestCase):
         )
         return path
 
+    def _make_rotated_video(self) -> Path:
+        source = self._make_video()
+        path = self.root / "source-rotated.mp4"
+        self._run_ffmpeg(
+            "-display_rotation",
+            "90",
+            "-i",
+            str(source),
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            str(path),
+        )
+        return path
+
     async def test_video_becomes_bounded_constant_24fps_mp4(self):
         source = await asyncio.to_thread(self._make_video)
         prepared = await prepare_upload(
@@ -278,8 +340,12 @@ class FfmpegPreparationTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(
                 prepared.metadata["height"], DEFAULT_LIMITS.normalized_video_edge
             )
-            self.assertEqual(prepared.metadata["width"] % 2, 0)
-            self.assertEqual(prepared.metadata["height"] % 2, 0)
+            self.assertLessEqual(
+                prepared.metadata["width"] * prepared.metadata["height"],
+                DEFAULT_LIMITS.normalized_video_pixels,
+            )
+            self.assertEqual(prepared.metadata["width"] % 32, 0)
+            self.assertEqual(prepared.metadata["height"] % 32, 0)
             self.assertTrue(prepared.metadata["has_audio"])
             self.assertEqual(prepared.metadata["audio_sample_rate"], 32000)
             self.assertEqual(prepared.metadata["audio_channels"], 2)
@@ -290,6 +356,28 @@ class FfmpegPreparationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             prepared.cleanup()
         self.assertFalse(path.exists())
+
+    async def test_rotated_metadata_is_probed_and_normalized_in_display_orientation(self):
+        source = await asyncio.to_thread(self._make_rotated_video)
+        prepared = await prepare_upload(
+            source, kind="video", original_name="portrait-phone.mp4"
+        )
+        try:
+            self.assertEqual(
+                (prepared.metadata["source_width"], prepared.metadata["source_height"]),
+                (320, 180),
+            )
+            self.assertEqual(
+                (
+                    prepared.metadata["source_display_width"],
+                    prepared.metadata["source_display_height"],
+                ),
+                (180, 320),
+            )
+            self.assertIn(prepared.metadata["source_rotation"], {90, 270})
+            self.assertLess(prepared.metadata["width"], prepared.metadata["height"])
+        finally:
+            prepared.cleanup()
 
     async def test_audio_becomes_bounded_stereo_32khz_wav(self):
         source = await asyncio.to_thread(self._make_audio)

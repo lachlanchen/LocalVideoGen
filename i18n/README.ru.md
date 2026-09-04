@@ -14,6 +14,8 @@
 
 LocalVideoGen — воспроизводимый операционный слой поверх внешней закреплённой установки ComfyUI и официального выровненного пакета MiniMax H3. Он предоставляет доступное только через loopback веб-приложение H3 Studio, загрузку моделей с обязательной проверкой контрольных сумм, процессы T2V/I2V/R2V, совместную нативную генерацию видео и звука, постоянную историю заданий и консервативное управление жизненным циклом для двух RTX 4090 по 24 GiB и 128 GiB оперативной памяти.
 
+Для длинной визуальной ссылки используйте профиль **Long reference · 24 GiB safe**: `quality_int8_offload`, `match` и 704×1248 для портрета либо 1248×704 для альбома. Проверка перед отправкой контролирует размеры и нагрузку ссылок и отклоняет небезопасное задание до передачи на GPU.
+
 | Donate | PayPal | Stripe |
 | --- | --- | --- |
 | [![Donate](https://img.shields.io/badge/Donate-LazyingArt-0EA5E9?style=for-the-badge&logo=kofi&logoColor=white)](https://chat.lazying.art/donate) | [![PayPal](https://img.shields.io/badge/PayPal-RongzhouChen-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/RongzhouChen) | [![Stripe](https://img.shields.io/badge/Stripe-Donate-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://buy.stripe.com/aFadR8gIaflgfQV6T4fw400) |
@@ -43,8 +45,8 @@ LocalVideoGen — воспроизводимый операционный сло
 
 ## Возможности
 
-- Профиль максимального качества: сокращённый BF16 Ref2VA/FL2VA DiT, выровненный NVFP4-AWQ Qwen3-VL conditioner, FP16 video VAE, FP32 audio VAE и 25 полных шагов модели.
-- Поэтапное размещение на двух GPU: GPU 0 выполняет DiT и denoising; GPU 1 — Qwen conditioning и video/audio VAE. Наличие PCIe peer-to-peer не предполагается.
+- Максимальная точность BF16 предназначена для короткой визуальной видеоссылки или R2V только с изображениями; длинные видеоссылки по умолчанию используют измеренный безопасный для 24 ГиБ путь INT8/offload.
+- На общей рабочей станции GPU 0 по умолчанию выполняет все этапы H3, а GPU 1 остаётся свободной для LocalLLM. Только явный `H3_AUX_DEVICE=gpu:1` переносит Qwen и reference VAE на GPU 1.
 - Локальные T2V, I2V и многоопорный R2V, включая профиль максимального сохранения идентичности и нативный синхронный звук.
 - Профили качества, резервный режим одной GPU и низкоразрешённый предпросмотр INT8 Turbo.
 - Локальный H3 выдаёт до 768 пикселей по короткой стороне при 24 fps. Отдельный этап регенерации MiniMax в 2K доступен только через API и не заявляется локальной функцией.
@@ -57,8 +59,9 @@ flowchart LR
     S --> V[Проверка загрузок и графа]
     V --> J[(Закрытый реестр заданий)]
     V -->|loopback :8188| C[Закреплённый ComfyUI]
-    C --> G0[GPU 0: DiT + denoising]
-    C --> G1[GPU 1: Qwen + video/audio VAE]
+    C --> G0[GPU 0: все этапы H3 по умолчанию]
+    G1[GPU 1: по умолчанию зарезервирована для LocalLLM]
+    C -. необязательный H3_AUX_DEVICE .-> G1
     C <--> R[RAM хоста: DynamicVRAM + асинхронный offload]
     M[Пакет моделей с проверкой SHA-256] --> C
 ```
